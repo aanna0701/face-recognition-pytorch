@@ -34,6 +34,7 @@ class Model(nn.Module):
         # ---------------------------------------
         # writers
         # ---------------------------------------
+        
         self.conf = conf
         self.logger_ = logger
         self.epoch = 0
