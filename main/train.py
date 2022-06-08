@@ -189,8 +189,6 @@ def main():
     global args
     args = parse_args()
     
-    
-    
     # ===========================================================
     # DDP settings
     # ===========================================================
@@ -210,8 +208,6 @@ def main():
                                 rank=rank, 
                                 world_size=world_size
                                 )
-    
-    
     
     # ===========================================================
     # Configurations
@@ -234,7 +230,6 @@ def main():
     
     config.generate_config(conf.network, conf.loss, conf.optimizer, conf.lr_scheduler)
     
-    
     # ===========================================================
     # Save directories
     # ===========================================================   
@@ -252,7 +247,6 @@ def main():
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     LOGGER = str(SAVE_DIR / 'log.txt')
     
-    
     # ===========================================================
     # Print configurations
     # ===========================================================
@@ -265,7 +259,6 @@ def main():
     del msg_conf
     copyfile(Path.cwd().parent / 'configs' / f'{args.config}.py', SAVE_DIR / f'{args.config}.py')
     
-    
     # ===========================================================
     # Data Module
     # ===========================================================
@@ -273,13 +266,11 @@ def main():
     train_dm = DATA_Module(conf, LOGGER)
     val_dm = DATA_Module(conf, LOGGER)
     
-    
     # ===========================================================
     # Model
     # ===========================================================
     
     model = Model(conf, LOGGER, 'train')
-    
     
     # ===========================================================
     # Run Jobs
