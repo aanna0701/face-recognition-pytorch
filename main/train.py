@@ -29,6 +29,8 @@ now = time.localtime()
 conf = None
 args = None
 
+
+
 # =========================================== Arguments ===========================================
 
 def get_wm_size(path):
@@ -76,6 +78,7 @@ class Trainer:
         # ===========================================================
         # Define Save Folder and Parameters
         # ===========================================================
+        
         ## Save directories
         SAVE_DIR = Path.cwd().parent / 'save' / f'{args.mode}_{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
         SAVE_DIR = SAVE_DIR.parent / ('_'.join(
@@ -171,6 +174,7 @@ class Trainer:
                                     'name': self.conf.network
                                     }, str(encoder_save_dir / f'{epoch+1}_epoch_encoder.pth'))
                     
+                    
 
 # ============================================== Main ==============================================
 
@@ -231,7 +235,6 @@ def main():
     config.generate_config(conf.network, conf.loss, conf.optimizer, conf.lr_scheduler)
     
     
-    
     # ===========================================================
     # Save directories
     # ===========================================================   
@@ -250,7 +253,6 @@ def main():
     LOGGER = str(SAVE_DIR / 'log.txt')
     
     
-    
     # ===========================================================
     # Print configurations
     # ===========================================================
@@ -262,20 +264,20 @@ def main():
     print_log(LOGGER, msg_conf)
     del msg_conf
     copyfile(Path.cwd().parent / 'configs' / f'{args.config}.py', SAVE_DIR / f'{args.config}.py')
-
     
     
     # ===========================================================
     # Data Module
     # ===========================================================
+    
     train_dm = DATA_Module(conf, LOGGER)
     val_dm = DATA_Module(conf, LOGGER)
-
     
     
     # ===========================================================
     # Model
     # ===========================================================
+    
     model = Model(conf, LOGGER, 'train')
     
     
