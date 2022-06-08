@@ -58,8 +58,6 @@ def parse_args():
     return args
 
 
-# ==================================================================================================
-
 
 # ============================================ Training ============================================
 
@@ -75,9 +73,9 @@ class Trainer:
         self.local_rank = conf.local_rank
         torch.cuda.set_device(self.local_rank)
         
-        # --------------------------------------------
+        # ===========================================================
         # Define Save Folder and Parameters
-        # --------------------------------------------
+        # ===========================================================
         ## Save directories
         SAVE_DIR = Path.cwd().parent / 'save' / f'{args.mode}_{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
         SAVE_DIR = SAVE_DIR.parent / ('_'.join(
@@ -93,8 +91,9 @@ class Trainer:
         self.save_dir = SAVE_DIR
         self.logger = str(SAVE_DIR / 'log.txt')
         
-        # --------------------------------------------
+        # ===========================================================
         # Addional Settings (Tracking, Summary, etc)
+        # ===========================================================
         
         # TBoard
         self.writer = None
