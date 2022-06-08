@@ -26,7 +26,7 @@ def print_peak_memory(prefix, device):
 class Model(nn.Module):
     global LOGGER
 
-    def __init__(self, conf:str, logger:str =None, stage:str = 'fit'):
+    def __init__(self, conf:str, logger:str=None, stage:str='stage'):
         super().__init__()
         # # turn off automatic optimization
         # self.automatic_optimization = False
@@ -51,7 +51,7 @@ class Model(nn.Module):
         # ---------------------------------------
         # model
         # ---------------------------------------
-        
+    
         # Encoder
         if 'ResNet' in conf.network:
             self.encoder = importlib.import_module(f"nets.resnet").Encoder(conf=conf)
@@ -91,22 +91,26 @@ class Model(nn.Module):
         # ---------------------------------------
         # Criterion
         # ---------------------------------------
+        
         self.criterion = nn.CrossEntropyLoss()
         
         
         # ---------------------------------------
         # Metrics
         # ---------------------------------------
+        
         self.train_acc = torchmetrics.Accuracy()
         
         # ---------------------------------------
         # Save Path
         # ---------------------------------------
+        
         self.save_path = Path(logger).parent
         
         # ---------------------------------------
         # Mixed precision
         # ---------------------------------------
+        
         self.grad_amp = MaxClipGradScaler(conf.b, 128 * conf.b) if conf.mixed_precision else None
         
         
@@ -114,6 +118,7 @@ class Model(nn.Module):
     # --------------------------------------------
     # forward
     # --------------------------------------------
+    
     def forward(self, x):
         feat = self.encoder(x) 
         return feat
@@ -122,6 +127,7 @@ class Model(nn.Module):
     # --------------------------------------------
     # training
     # --------------------------------------------
+    
     def training_step(self, batch, train_set_idx):
         # inputs
         img, id_ = batch
@@ -235,6 +241,7 @@ class Model(nn.Module):
     # --------------------------------------------
     # training epoch end
     # --------------------------------------------
+    
     def training_epoch_end(self, outputs, train_set_idx, running_t=None):
         ## Print train results
         # train loss
@@ -288,6 +295,7 @@ class Model(nn.Module):
     # --------------------------------------------
     # optimization
     # --------------------------------------------
+    
     def configure_optimizers(self): 
         opt = edict()
         opt.loss = list()
