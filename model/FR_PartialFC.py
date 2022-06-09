@@ -74,6 +74,8 @@ class Model(nn.Module):
             
             # Loading PartialFC loss
             self.loss = nn.ModuleList()
+            
+            
             for i in range(len(conf.train_dataset)):
                 if conf.optimizer == 'SGD':
                     self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFC(conf=conf, 
