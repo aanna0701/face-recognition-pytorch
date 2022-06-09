@@ -26,7 +26,7 @@ def print_peak_memory(prefix, device):
 class Model(nn.Module):
     global LOGGER
 
-    def __init__(self, conf:str, logger:str=None, stage:str='stage'):
+    def __init__(self, conf:str, logger:str =None, stage:str = 'fit'):
         super().__init__()
         # # turn off automatic optimization
         # self.automatic_optimization = False
@@ -34,7 +34,6 @@ class Model(nn.Module):
         # ---------------------------------------
         # writers
         # ---------------------------------------
-        
         self.conf = conf
         self.logger_ = logger
         self.epoch = 0
@@ -52,10 +51,13 @@ class Model(nn.Module):
         # ---------------------------------------
         # model
         # ---------------------------------------
-    
+        
         # Encoder
         if 'ResNet' in conf.network:
             self.encoder = importlib.import_module(f"nets.resnet").Encoder(conf=conf)
+            
+        elif 'AlterNet' in conf.network:
+            self.encoder = importlib.import_module(f"nets.AlterNet").Encoder(conf=conf)
             
         if conf.transfer_learning:
             print('Transferring Weight')
@@ -78,8 +80,8 @@ class Model(nn.Module):
             self.loss = nn.ModuleList()
             for i in range(len(conf.train_dataset)):
                 self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFC(conf=conf, 
-                                                                                        n_classes=conf.n_classes[i],
-                                                                                        idx=i))
+                                                                                        num_classes=conf.n_classes[i]
+                                                                                        ))
                 
             # Initializing Optimizers and Schedulers
             self.opts, self.schs = self.configure_optimizers()
@@ -92,34 +94,32 @@ class Model(nn.Module):
         # ---------------------------------------
         # Criterion
         # ---------------------------------------
-        
         self.criterion = nn.CrossEntropyLoss()
         
         
         # ---------------------------------------
         # Metrics
         # ---------------------------------------
-        
         self.train_acc = torchmetrics.Accuracy()
         
         # ---------------------------------------
         # Save Path
         # ---------------------------------------
-        
         self.save_path = Path(logger).parent
         
         # ---------------------------------------
         # Mixed precision
         # ---------------------------------------
-        
-        self.grad_amp = MaxClipGradScaler(conf.b, 128 * conf.b) if conf.mixed_precision else None
+        if conf.mixed_precision:
+            # self.grad_amp = MaxClipGradScaler(conf.b, 128 * conf.b)
+            self.amp = torch.cuda.amp.grad_scaler.GradScaler(growth_interval=100)
+            print('Mixed Precision !!!\n')
         
         
         
     # --------------------------------------------
     # forward
     # --------------------------------------------
-    
     def forward(self, x):
         feat = self.encoder(x) 
         return feat
@@ -128,41 +128,36 @@ class Model(nn.Module):
     # --------------------------------------------
     # training
     # --------------------------------------------
-    
     def training_step(self, batch, train_set_idx):
         # inputs
         img, id_ = batch
         img, id_ = img.to(self.conf.local_rank), id_.to(self.conf.local_rank)
-        
-        self.opts.encoder.zero_grad()
-        self.opts.loss[train_set_idx].zero_grad()
         
         # Encdoer forward
         self.encoder.train()
         feat = F.normalize(self.forward(img))
         
         # PartialFC forward and backward
-        grad, loss, logits_exp = self.loss[train_set_idx].forward_backward(id_, feat, self.opts.loss[train_set_idx])
+        self.loss[train_set_idx].train().cuda()
+        loss = self.loss[train_set_idx](feat, id_, self.opts[train_set_idx])
         
         # Encoder backward
         if self.conf.mixed_precision:
-            feat.backward(self.grad_amp.scale(grad))
-            self.grad_amp.unscale_(self.opts.encoder)
-            clip_grad_norm_(self.encoder.parameters(), max_norm=5, norm_type=2)
-            self.grad_amp.step(self.opts.encoder)
-            self.grad_amp.update()
+            self.amp.scale(loss).backward()
+            self.amp.unscale_(self.opts[train_set_idx])
+            torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 5)
+            self.amp.step(self.opts[train_set_idx])
+            self.amp.update()
             
         else:
-            feat.backward(grad)
-            clip_grad_norm_(self.encoder.parameters(), max_norm=5, norm_type=2)
-            self.opts.encoder.step()
-
-        # PartialFC Update
-        self.opts.loss[train_set_idx].step()
-        self.loss[train_set_idx].update()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 5)
+            self.opts[train_set_idx].step()
+        
+        self.opts[train_set_idx].zero_grad()
         
         return {
-            'loss': loss.cpu()
+            'loss': loss.cpu().detach().numpy()
         }
 
 
@@ -242,13 +237,12 @@ class Model(nn.Module):
     # --------------------------------------------
     # training epoch end
     # --------------------------------------------
-    
     def training_epoch_end(self, outputs, train_set_idx, running_t=None):
         ## Print train results
         # train loss
         train_loss = np.stack([x["loss"] for x in outputs]).mean()
         # learning rate
-        lr = self.schs.encoder.get_last_lr()[0]
+        lr = self.schs[train_set_idx].get_last_lr()[0]
         # epoch
         epoch = self.epoch + 1
         
@@ -283,8 +277,7 @@ class Model(nn.Module):
         
         self.epoch += 1
         
-        self.schs.encoder.step()
-        self.schs.loss[train_set_idx].step()
+        self.schs[train_set_idx].step()
         
         return {
                     'lr': lr,
@@ -296,89 +289,53 @@ class Model(nn.Module):
     # --------------------------------------------
     # optimization
     # --------------------------------------------
-    
     def configure_optimizers(self): 
-        opt = edict()
-        opt.loss = list()
+        opt = list()
+        sch = list()
         
-        sch = edict()
-        sch.loss = list()
+        for loss in self.loss:
+            ## Optimizer
+            if self.conf.optimizer == 'AdamW':
+                opt.append(torch.optim.AdamW([{'params': self.encoder.parameters()}, {'params': loss.parameters()}], 
+                                                lr=self.lr,
+                                                weight_decay=self.conf.wd,
+                                                eps=self.conf.eps,
+                                                betas=self.conf.betas
+                                                ))
+                
+            elif self.conf.optimizer == 'SGD':
+                opt.append(torch.optim.SGD([{'params': self.encoder.parameters()}, {'params': loss.parameters()}], 
+                                                lr=self.lr, 
+                                                momentum=self.conf.mom, 
+                                                weight_decay=self.conf.wd))
         
-        ## Optimizer
-        if self.conf.optimizer == 'Adam':
-            opt.encoder = torch.optim.Adam([{'params': self.encoder.parameters()}], 
-                                            lr=self.lr, 
-                                            weight_decay=self.conf.wd)
-                    
-        elif self.conf.optimizer == 'SGD':
-            opt.encoder = torch.optim.SGD([{'params': self.encoder.parameters()}], 
-                                            lr=self.lr, 
-                                            momentum=self.conf.mom, 
-                                            weight_decay=self.conf.wd)
-            
-        ## Scheduler
-        if self.conf.lr_scheduler == 'CosineAnnealingWarmupRestarts':
-            sch.encoder = importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
-                                                                                                    opt.encoder,
+            ## Scheduler
+            if self.conf.lr_scheduler == 'CosineAnnealingWarmupRestarts':
+                sch.append(importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
+                                                                                                    opt[-1],
                                                                                                     first_cycle_steps=self.conf.num_epoch, 
                                                                                                     warmup_steps=self.conf.warmup_steps,
                                                                                                     min_lr=self.conf.min_lr,
-                                                                                                    max_lr=self.lr)
-            
-        elif self.conf.lr_scheduler == 'MultiStep':
-            sch.encoder = optim.lr_scheduler.MultiStepLR(opt.encoder, milestones=self.conf.lr_decay_epoch, gamma=self.conf.lr_decay_ratio)
-            
-        elif self.conf.lr_scheduler == 'StepLR':
-            sch.encoder = optim.lr_scheduler.StepLR(opt.encoder, step_size=self.conf.lr_decay_epoch_size, gamma=self.conf.lr_decay_ratio)
-            
-        elif self.conf.lr_scheduler == 'CosineAnnealingLR':
-            sch.encoder = importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
-                                                                                                    opt.encoder,
+                                                                                                    max_lr=self.lr))
+                
+            elif self.conf.lr_scheduler == 'MultiStep':
+                sch.append(optim.lr_scheduler.MultiStepLR(opt.loss[-1], milestones=self.conf.lr_decay_epoch, gamma=self.conf.lr_decay_ratio))
+                
+            elif self.conf.lr_scheduler == 'StepLR':
+                sch.append(optim.lr_scheduler.StepLR(opt.loss[-1], step_size=self.conf.lr_decay_epoch_size, gamma=self.conf.lr_decay_ratio))
+                
+            elif self.conf.lr_scheduler == 'CosineAnnealingLR':
+                sch.append(importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
+                                                                                                    opt[-1],
                                                                                                     first_cycle_steps=self.conf.num_epoch+1, 
                                                                                                     warmup_steps=self.conf.warmup_steps,
                                                                                                     min_lr=self.conf.min_lr,
-                                                                                                    max_lr=self.lr)
-                                                    
-        for loss in self.loss:
-            ## Optimizer
-            if self.conf.optimizer == 'Adam':
-                opt.loss.append(torch.optim.Adam([{'params': loss.parameters()}], 
-                                                    lr=self.lr, 
-                                                    weight_decay=self.conf.wd))
-                
-            elif self.conf.optimizer == 'SGD':
-                opt.loss.append(torch.optim.SGD([{'params': loss.parameters()}], 
-                                                    lr=self.lr, 
-                                                    momentum=self.conf.mom, 
-                                                    weight_decay=self.conf.wd))
-            
-            ## Scheduler
-            if self.conf.lr_scheduler == 'CosineAnnealingWarmupRestarts':
-                sch.loss.append(importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
-                                                                                                        opt.loss[-1],
-                                                                                                        first_cycle_steps=self.conf.num_epoch, 
-                                                                                                        warmup_steps=self.conf.warmup_steps,
-                                                                                                        min_lr=self.conf.min_lr,
-                                                                                                        max_lr=self.lr))
-                
-            elif self.conf.lr_scheduler == 'MultiStep':
-                sch.loss.append(optim.lr_scheduler.MultiStepLR(opt.loss[-1], milestones=self.conf.lr_decay_epoch, gamma=self.conf.lr_decay_ratio))
-                
-            elif self.conf.lr_scheduler == 'StepLR':
-                sch.loss.append(optim.lr_scheduler.StepLR(opt.loss[-1], step_size=self.conf.lr_decay_epoch_size, gamma=self.conf.lr_decay_ratio))
-                
-            elif self.conf.lr_scheduler == 'CosineAnnealingLR':
-                sch.loss.append(importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
-                                                                                                        opt.loss[-1],
-                                                                                                        first_cycle_steps=self.conf.num_epoch+1, 
-                                                                                                        warmup_steps=self.conf.warmup_steps,
-                                                                                                        min_lr=self.conf.min_lr,
-                                                                                                        max_lr=self.lr))
+                                                                                                    max_lr=self.lr))
         
         msg = '\n'+ '='*50 + '\n'
         msg += '* Optimizer and Scheduler *\n'
-        msg += f'- The Number of Optimizers: {len(opt.loss)}\n'
-        msg += f'- The Number of Schedulers: {len(sch.loss)}\n'
+        msg += f'- The Number of Optimizers: {len(opt)}\n'
+        msg += f'- The Number of Schedulers: {len(sch)}\n'
         msg += '='*50 + '\n'
         print(msg) if self.logger_ is None else print_log(self.logger_, msg)
         

@@ -1,56 +1,106 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn import Parameter
 import math
 
-# --------------------------------------------- ArcFace --------------------------------------------
 
-class Classifier(nn.Module):
-    """Implement of large margin arc distance (https://arxiv.org/pdf/1801.07698v1.pdf):
-        Args:
-            in_features: size of each input sample
-            out_features: size of each output sample
-            s: norm of input feature
-            m: additive angular margin
+class CombinedMarginLoss(torch.nn.Module):
+    def __init__(self, 
+                    s, 
+                    m1,
+                    m2,
+                    m3,
+                    interclass_filtering_threshold=0):
+        super().__init__()
+        self.s = s
+        self.m1 = m1
+        self.m2 = m2
+        self.m3 = m3
+        self.interclass_filtering_threshold = interclass_filtering_threshold
+        
+        # For ArcFace
+        self.cos_m = math.cos(self.m2)
+        self.sin_m = math.sin(self.m2)
+        self.theta = math.cos(math.pi - self.m2)
+        self.sinmm = math.sin(math.pi - self.m2) * self.m2
+        self.easy_margin = False
 
-            cos(theta + m)
-    """
-    def __init__(self, conf, n_classes):
-        super(Classifier, self).__init__()
-        self.in_features = conf.emd_size
-        self.out_features = n_classes
-        self.s = conf.loss_s
-        self.m = conf.loss_m
-        self.weight = Parameter(torch.FloatTensor(n_classes, conf.emd_size))
-        nn.init.xavier_uniform_(self.weight)
 
-        self.easy_margin = conf.easy_margin
-        self.cos_m = math.cos(conf.loss_m)
-        self.sin_m = math.sin(conf.loss_m)
-        self.th = math.cos(math.pi - conf.loss_m)
-        self.mm = math.sin(math.pi - conf.loss_m) * conf.loss_m
+    def forward(self, logits, labels):
+        index_positive = torch.where(labels != -1)[0]
 
-        self.device = conf.device
+        if self.interclass_filtering_threshold > 0:
+            with torch.no_grad():
+                dirty = logits > self.interclass_filtering_threshold
+                dirty = dirty.float()
+                mask = torch.ones([index_positive.size(0), logits.size(1)], device=logits.device)
+                mask.scatter_(1, labels[index_positive], 0)
+                dirty[index_positive] *= mask
+                tensor_mul = 1 - dirty    
+            logits = tensor_mul * logits
 
-    def forward(self, input, label):
-        # cos(theta) & phi(theta)
-        cosine = (F.linear(F.normalize(input), F.normalize(self.weight))).clamp(-1 + 1e-9, 1 - 1e-9)
-        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
-        phi = cosine * self.cos_m - sine * self.sin_m
+        target_logit = logits[index_positive, labels[index_positive].view(-1)]
 
-        # if use easy_margin
-        if self.easy_margin:
-            phi = torch.where(cosine > 0, phi, cosine)
+        if self.m1 == 1.0 and self.m3 == 0.0:
+            sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+            cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m  # cos(target+margin)
+            if self.easy_margin:
+                final_target_logit = torch.where(
+                    target_logit > 0, cos_theta_m, target_logit)
+            else:
+                final_target_logit = torch.where(
+                    target_logit > self.theta, cos_theta_m, target_logit - self.sinmm)
+            logits[index_positive, labels[index_positive].view(-1)] = final_target_logit
+            logits = logits * self.s
+        
+        elif self.m3 > 0:
+            final_target_logit = target_logit - self.m3
+            logits[index_positive, labels[index_positive].view(-1)] = final_target_logit
+            logits = logits * self.s
         else:
-            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+            raise        
 
-        # convert label to one-hot
-        one_hot = torch.zeros(cosine.size(), device=self.device)
-        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        return logits
 
-        # torch.where(out_i = {x_i if condition_i else y_i)
-        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
-        output *= self.s
+class ArcFace(torch.nn.Module):
+    """ ArcFace (https://arxiv.org/pdf/1801.07698v1.pdf):
+    """
+    def __init__(self, s=64.0, margin=0.5):
+        super(ArcFace, self).__init__()
+        self.scale = s
+        self.cos_m = math.cos(margin)
+        self.sin_m = math.sin(margin)
+        self.theta = math.cos(math.pi - margin)
+        self.sinmm = math.sin(math.pi - margin) * margin
+        self.easy_margin = False
 
-        return output
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor):
+        index = torch.where(labels != -1)[0]
+        target_logit = logits[index, labels[index].view(-1)]
+
+        sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+        cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m  # cos(target+margin)
+        if self.easy_margin:
+            final_target_logit = torch.where(
+                target_logit > 0, cos_theta_m, target_logit)
+        else:
+            final_target_logit = torch.where(
+                target_logit > self.theta, cos_theta_m, target_logit - self.sinmm)
+
+        logits[index, labels[index].view(-1)] = final_target_logit
+        logits = logits * self.scale
+        return logits
+
+
+class CosFace(torch.nn.Module):
+    def __init__(self, s=64.0, m=0.40):
+        super(CosFace, self).__init__()
+        self.s = s
+        self.m = m
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor):
+        index = torch.where(labels != -1)[0]
+        target_logit = logits[index, labels[index].view(-1)]
+        final_target_logit = target_logit - self.m
+        logits[index, labels[index].view(-1)] = final_target_logit
+        logits = logits * self.s
+        return logits

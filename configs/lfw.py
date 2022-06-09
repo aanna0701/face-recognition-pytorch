@@ -3,10 +3,13 @@ from pathlib import Path
 
 conf = edict()
 
-NETWORK = ['ResNet100', 'ResNet200', 'ResNet34', 'ResNet50']
+NETWORK = [
+            'ResNet100', 'ResNet200', 'ResNet34', 'ResNet50',
+            'AlterNet50'
+            ]
 LOSS = ['ArcFace', 'PartialFC']
 METRIC = ['ArcFace']
-OPTIMIZER = ['SGD', 'Adam']
+OPTIMIZER = ['SGD', 'AdamW']
 DATA_DIR = '/workspace/dataset/FR'
 TRAIN_DATA = ['webface42m', 'lfw', 'ms1m_arcface_122']
 N_CLASSESE = {
@@ -19,7 +22,7 @@ VAL_DATA = ['lfw', 'agedb_30', 'cfp_fp', 'cfp_ff', 'calfw', 'cplfw']
 # --------------------------------------------
 # Default network
 # --------------------------------------------
-conf.network = 'ResNet100'
+conf.network = 'AlterNet50'
 assert conf.network in NETWORK, 'Invalid model !!!'
 conf.resume = False
 conf.pretrained = False
@@ -78,7 +81,7 @@ conf.num_workers = 20
 conf.num_epoch = 300 # end of epoch
 conf.device = 'cuda'
 conf.valid_freq = 1
-conf.save_epoch = 1
+conf.save_epoch = 99999
 conf.matching_type = 'euclidean'
 conf.data_augmentation = [
                             "RandomHorizontalFlip", 
@@ -89,7 +92,7 @@ conf.data_augmentation = [
                             ]
 conf.label_smooth = False
 conf.mixed_precision = True
-conf.lr_scheduler = "CosineAnnealingLR"
+conf.lr_scheduler = "CosineAnnealingWarmupRestarts"
 
 # --------------------------------------------
 # Data Augmentation
@@ -128,6 +131,22 @@ network.ResNet34.network_name = 'ResNet34'
 # ResNet50
 network.ResNet50 = edict()
 network.ResNet50.network_name = 'ResNet50'
+
+# --------------------------------------------
+# AlterNet configurations
+# --------------------------------------------
+# AlterNet101
+network.AlterNet101 = edict()
+network.AlterNet101.network_name = 'AlterNet101'
+# AlterNet151
+network.AlterNet151 = edict()
+network.AlterNet151.network_name = 'AlterNet151'
+# AlterNet34
+network.AlterNet34 = edict()
+network.AlterNet34.network_name = 'AlterNet34'
+# AlterNet50
+network.AlterNet50 = edict()
+network.AlterNet50.network_name = 'AlterNet50'
 
 
 
@@ -170,6 +189,15 @@ optimizer.SGD.mom = 0.9
 optimizer.Adam = edict()
 optimizer.Adam.optimizer_name = 'Adam'
 optimizer.Adam.wd = 0.0005
+optimizer.SGD.mom = 0.9
+# --------------------------------------------
+# AdamW configurations
+# --------------------------------------------
+optimizer.AdamW = edict()
+optimizer.AdamW.optimizer_name = 'AdamW'
+optimizer.AdamW.wd = 0.0005
+optimizer.AdamW.eps = 1e-8
+optimizer.AdamW.betas = (0.9, 0.999)
 
 # ==================================== Scheduler configuration ====================================
 scheduler = edict()
@@ -177,7 +205,7 @@ scheduler = edict()
 # CosineAnnealingWarmupRestarts configurations
 # --------------------------------------------
 scheduler.CosineAnnealingWarmupRestarts = edict()
-scheduler.CosineAnnealingWarmupRestarts.warmup_steps = 30
+scheduler.CosineAnnealingWarmupRestarts.warmup_steps = 5
 scheduler.CosineAnnealingWarmupRestarts.min_lr = conf.lr / 1000
 # --------------------------------------------
 # CosineAnnealingLR configurations
