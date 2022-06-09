@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument('--optimizer', default="SGD", type=str, help='optimizer')
     parser.add_argument('--lr', default="1e-1", type=float, help='learning rate')
     parser.add_argument('--no_mixed_precision', action='store_false')
+    parser.add_argument('--sample_rate', default=0.3, type=float)
 
     args = parser.parse_args()
 
@@ -211,7 +212,6 @@ def main():
     # ===========================================================
     
     config = importlib.import_module(f"configs.{args.config}")
-    global conf
     conf = config.conf
     conf.network = args.network
     assert conf.network in config.NETWORK, 'Invalid model !!!'
@@ -220,15 +220,16 @@ def main():
     conf.optimizer = args.optimizer
     assert conf.optimizer in config.OPTIMIZER, 'Invalid optimizer !!!'
     conf.lr = args.lr
+    
+    config.generate_config(conf.network, conf.loss, conf.optimizer, conf.lr_scheduler)
+    
     if conf.lr_scheduler == "CosineAnnealingWarmupRestarts":
         conf.min_lr = args.lr / 1000
     conf.world_size = world_size
     conf.rank = rank
     conf.local_rank = local_rank
     conf.mixed_precision = args.no_mixed_precision
-    
-    config.generate_config(conf.network, conf.loss, conf.optimizer, conf.lr_scheduler)
-    
+    conf.sample_rate = 0.3
     
     # ===========================================================
     # Save directories
