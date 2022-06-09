@@ -405,13 +405,6 @@ def ln1d(dim):
     return nn.LayerNorm(dim)
 
 
-def ln2d(dim):
-    return nn.Sequential(
-        Rearrange("b c h w -> b h w c"),
-        nn.LayerNorm(dim),
-        Rearrange("b h w c -> b c h w"),
-    )
-
 
 def dense(in_features, out_features, bias=True):
     return nn.Linear(in_features, out_features, bias)
@@ -542,6 +535,10 @@ class LocalAttention(nn.Module):
 
     def forward(self, x, mask=None):
         b, c, h, w = x.shape
+        if h == 4:
+            self.window_size = 2
+            self.rel_index = self.rel_distance(self.window_size) + self.window_size - 1
+            
         p = self.window_size
         n1 = h // p
         n2 = w // p
@@ -692,7 +689,7 @@ class StemB(nn.Module):
 
         self.layer0 = []
         if pool:
-            self.layer0.append(convnxn(dim_in, dim_out, kernel_size=3, stride=1, padding=1))
+            self.layer0.append(convnxn(dim_in, dim_out, kernel_size=7, stride=2, padding=3))
             self.layer0.append(nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
         else:
             self.layer0.append(conv3x3(dim_in, dim_out, stride=1))

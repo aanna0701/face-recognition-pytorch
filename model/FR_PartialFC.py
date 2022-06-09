@@ -14,8 +14,6 @@ from utils.eval import performance
 from easydict import EasyDict as edict
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
-from utils.amp import MaxClipGradScaler
-from torch.nn.utils import clip_grad_norm_
 
 
 def print_peak_memory(prefix, device):
@@ -72,17 +70,26 @@ class Model(nn.Module):
             self.encoder = self.encoder.to(conf.local_rank)
             self.encoder = DDP(self.encoder, broadcast_buffers=False, device_ids=[conf.local_rank])
             
-            if conf.local_rank == 0:
-                print(self.encoder)
             print_peak_memory("Max Memory Afer DDP", conf.local_rank)
             
             # Loading PartialFC loss
             self.loss = nn.ModuleList()
             for i in range(len(conf.train_dataset)):
-                self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFC(conf=conf, 
-                                                                                        num_classes=conf.n_classes[i]
-                                                                                        ))
-                
+                if conf.optimizer == 'SGD':
+                    self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFC(conf=conf, 
+                                                                                            num_classes=conf.n_classes[i]
+                                                                                            ))
+                elif conf.optimizer == 'AdamW':
+                    self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFCAdamW(conf=conf, 
+                                                                                                num_classes=conf.n_classes[i]
+                                                                                                ))
+            if conf.local_rank == 0:
+                print()
+                print(self.encoder)
+                print()
+                print(self.loss[0])
+                print()
+            
             # Initializing Optimizers and Schedulers
             self.opts, self.schs = self.configure_optimizers()
             
@@ -324,13 +331,6 @@ class Model(nn.Module):
             elif self.conf.lr_scheduler == 'StepLR':
                 sch.append(optim.lr_scheduler.StepLR(opt.loss[-1], step_size=self.conf.lr_decay_epoch_size, gamma=self.conf.lr_decay_ratio))
                 
-            elif self.conf.lr_scheduler == 'CosineAnnealingLR':
-                sch.append(importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
-                                                                                                    opt[-1],
-                                                                                                    first_cycle_steps=self.conf.num_epoch+1, 
-                                                                                                    warmup_steps=self.conf.warmup_steps,
-                                                                                                    min_lr=self.conf.min_lr,
-                                                                                                    max_lr=self.lr))
         
         msg = '\n'+ '='*50 + '\n'
         msg += '* Optimizer and Scheduler *\n'

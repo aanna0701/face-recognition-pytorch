@@ -4,25 +4,18 @@ sys.path.append(str(Path.cwd().parent))
 import torch
 import numpy as np
 import torch.distributed as dist 
+import torch.multiprocessing as mp
 from torch.utils.tensorboard import SummaryWriter
-#import mlflow
-#from mlflow import log_metric, log_param, log_artifact
 import argparse
 import os
-import pandas as pd
 import importlib
 from shutil import copyfile
-import time
-import torch.distributed as dist
 import pandas as pd
-import torch
-
 from utils.data_partial import DATA_Module
 from model.FR_PartialFC import Model
 import time
 from utils.logger import print_log
 from shutil import copyfile
-import os
 
 os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
 now = time.localtime()
@@ -47,13 +40,13 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='train the face recognition network')
     parser.add_argument('--config', default="lfw", help='name of config file without file extension')
-    parser.add_argument('--local_rank', default=0, type=int, help='Local Rank')
+    # parser.add_argument('--local_rank', default=0, type=int, help='Local Rank')
     parser.add_argument('--mode', default="train", choices=['train', 'test'], help='mode of this script')
     parser.add_argument('--network', default="ResNet50", type=str, help='Backbone network')
     parser.add_argument('--loss', default="PartialFC", type=str, help='Embedding space')
     parser.add_argument('--optimizer', default="SGD", type=str, help='optimizer')
     parser.add_argument('--lr', default="1e-1", type=float, help='learning rate')
-    parser.add_argument('--mixed_precision', action='store_true')
+    parser.add_argument('--no_mixed_precision', action='store_false')
 
     args = parser.parse_args()
 
@@ -173,8 +166,8 @@ class Trainer:
                                     'epoch': epoch+1,
                                     'name': self.conf.network
                                     }, str(encoder_save_dir / f'{epoch+1}_epoch_encoder.pth'))
-                    
-                    
+
+
 
 # ============================================== Main ==============================================
 
@@ -189,25 +182,29 @@ def main():
     global args
     args = parse_args()
     
+    
     # ===========================================================
-    # DDP settings
+    # DDP Setup
     # ===========================================================
     
     try:
         world_size = int(os.environ['WORLD_SIZE'])
         rank = int(os.environ['RANK'])
-        dist.init_process_group('nccl')
+        local_rank = int(os.environ['LOCAL_RANK'])
         
     except KeyError:
         print("Training single node single GPUs\n")
         world_size = 1
         rank = 0
-        dist.init_process_group(
-                                backend='nccl', 
-                                init_method="tcp://127.0.0.1:12584", 
-                                rank=rank, 
-                                world_size=world_size
-                                )
+        local_rank = 0
+        
+    dist.init_process_group(
+                            backend='nccl', 
+                            init_method="tcp://127.0.0.1:12584", 
+                            rank=rank, 
+                            world_size=world_size
+                            )
+
     
     # ===========================================================
     # Configurations
@@ -223,12 +220,15 @@ def main():
     conf.optimizer = args.optimizer
     assert conf.optimizer in config.OPTIMIZER, 'Invalid optimizer !!!'
     conf.lr = args.lr
+    if conf.lr_scheduler == "CosineAnnealingWarmupRestarts":
+        conf.min_lr = args.lr / 1000
     conf.world_size = world_size
     conf.rank = rank
-    conf.local_rank = args.local_rank
-    conf.mixed_precision = args.mixed_precision
+    conf.local_rank = local_rank
+    conf.mixed_precision = args.no_mixed_precision
     
     config.generate_config(conf.network, conf.loss, conf.optimizer, conf.lr_scheduler)
+    
     
     # ===========================================================
     # Save directories
@@ -247,6 +247,7 @@ def main():
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     LOGGER = str(SAVE_DIR / 'log.txt')
     
+    
     # ===========================================================
     # Print configurations
     # ===========================================================
@@ -259,18 +260,19 @@ def main():
     del msg_conf
     copyfile(Path.cwd().parent / 'configs' / f'{args.config}.py', SAVE_DIR / f'{args.config}.py')
     
+    
     # ===========================================================
     # Data Module
     # ===========================================================
-    
     train_dm = DATA_Module(conf, LOGGER)
     val_dm = DATA_Module(conf, LOGGER)
+    
     
     # ===========================================================
     # Model
     # ===========================================================
-    
     model = Model(conf, LOGGER, 'train')
+    
     
     # ===========================================================
     # Run Jobs
@@ -278,6 +280,13 @@ def main():
     
     trainer = Trainer(conf, 'train')
     trainer.train(model, train_dm, val_dm)
+    
+    
+    # ===========================================================
+    # DDP Cleanup
+    # ===========================================================
+    
+    dist.destroy_process_group()
     
     
     
