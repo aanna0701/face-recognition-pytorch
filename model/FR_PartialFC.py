@@ -14,6 +14,7 @@ from utils.eval import performance
 from easydict import EasyDict as edict
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
+from torchsummary import summary
 
 
 def print_peak_memory(prefix, device):
@@ -85,9 +86,11 @@ class Model(nn.Module):
                     self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFCAdamW(conf=conf, 
                                                                                                 num_classes=conf.n_classes[i]
                                                                                                 ))
+                    
             if conf.local_rank == 0:
                 print()
-                print(self.encoder)
+                # print(self.encoder)
+                summary(self.encoder, (3, 112, 112))
                 print()
                 print(self.loss[0])
                 print()

@@ -225,11 +225,12 @@ def main():
     
     if conf.lr_scheduler == "CosineAnnealingWarmupRestarts":
         conf.min_lr = args.lr / 1000
+        
     conf.world_size = world_size
     conf.rank = rank
     conf.local_rank = local_rank
     conf.mixed_precision = args.no_mixed_precision
-    conf.sample_rate = 0.3
+    conf.sample_rate = args.sample_rate
     
     # ===========================================================
     # Save directories

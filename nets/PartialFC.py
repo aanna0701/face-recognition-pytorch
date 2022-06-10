@@ -276,7 +276,7 @@ class PartialFCAdamW(torch.nn.Module):
 
         self.is_updated: bool = True
         self.init_weight_update: bool = True
-        
+
         if self.sample_rate < 1:
             self.register_buffer("weight",
                 tensor=torch.normal(0, 0.01, (self.num_local, self.embedding_size)))
@@ -402,12 +402,10 @@ class PartialFCAdamW(torch.nn.Module):
         logits = logits.clamp(-1, 1)
 
         logits = self.margin_softmax(logits, labels)
-        
         loss = self.dist_cross_entropy(logits, labels)
         
+        
         return loss
-    
-    
     def state_dict(self, destination=None, prefix="", keep_vars=False):
         if destination is None: 
             destination = collections.OrderedDict()
@@ -421,7 +419,6 @@ class PartialFCAdamW(torch.nn.Module):
         else:
             destination["weight"] = self.weight_activated.data.detach()
         return destination
-    
 
     def load_state_dict(self, state_dict, strict: bool = True):
         if self.sample_rate < 1:

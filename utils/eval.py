@@ -1,7 +1,7 @@
 import numpy as np
 import math
 
-def performance(embedding_1, embedding_2, label_list, metric='euclidean', min_level=3, max_level=9):
+def performance(embedding_1, embedding_2, label_list, metric='cosine', min_level=3, max_level=9):
 
     num_total = len(label_list)
     
@@ -28,7 +28,7 @@ def performance(embedding_1, embedding_2, label_list, metric='euclidean', min_le
     
     for i in range(num_total):
         label = label_list[i]
-        score = math.floor(score_list[i] * 1e5)
+        score = int(score_list[i] * (1e5-1.))
         if label:
             hist_genuine[score] += 1
         else:

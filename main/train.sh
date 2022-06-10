@@ -1,0 +1,14 @@
+for m in AlterNet50 ResNet50
+do
+for r in 0.3 1.0
+do
+
+python train.py --sample_rate ${r} --optimizer SGD --network ${m} --lr 0.1
+
+for l in 5e-4 1e-4 5e-5
+do
+python train.py --sample_rate ${r} --optimizer AdamW --network ${m} --lr ${l}
+done
+
+done
+done

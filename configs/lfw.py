@@ -5,7 +5,7 @@ conf = edict()
 
 NETWORK = [
             'ResNet100', 'ResNet200', 'ResNet34', 'ResNet50',
-            'AlterNet50'
+            'AlterNet50', 'AlterNet34'
             ]
 LOSS = ['ArcFace', 'PartialFC']
 METRIC = ['ArcFace']
@@ -72,13 +72,13 @@ conf.model_dir = './models'
 # --------------------------------------------
 # Default hyperparameters
 # --------------------------------------------
-conf.b = 64 # mini-batch size
+conf.b = 128 # mini-batch size
 conf.lr = 0.05 # learning rate
 conf.k = 1
 conf.sample_rate = 1.0
 conf.use_ddp = False
 conf.num_workers = 20
-conf.num_epoch = 300 # end of epoch
+conf.num_epoch = 100 # end of epoch
 conf.device = 'cuda'
 conf.valid_freq = 1
 conf.save_epoch = 99999

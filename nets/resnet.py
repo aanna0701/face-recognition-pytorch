@@ -209,12 +209,12 @@ class ResNet(nn.Module):
         self.layer1 = self.stack_layers(block, 64, layers[0])
         self.layer2 = self.stack_layers(block, 128, layers[1], stride=2)
         self.layer3 = self.stack_layers(block, 256, layers[2], stride=2)
-        self.layer4 = self.stack_layers(block, 512, layers[3], stride=2)
+        self.layer4 = self.stack_layers(block, conf.emd_size, layers[3], stride=2)
 
-        self.bn2 = nn.BatchNorm2d(block.expansion * 512)
+        self.bn2 = nn.BatchNorm2d(block.expansion * conf.emd_size)
         self.dropout = nn.Dropout()
-        self.fc = nn.Linear(block.expansion * 512 * 7 * 7, 512)
-        self.bn3 = nn.BatchNorm1d(512)
+        self.fc = nn.Linear(block.expansion * conf.emd_size * 7 * 7, conf.emd_size)
+        self.bn3 = nn.BatchNorm1d(conf.emd_size)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -276,9 +276,7 @@ def ResNet18(conf, **kwargs):
     ResidualBlock = BasicBlock
     model = ResNet(ResidualBlock, [2, 2, 2, 2], conf, **kwargs)
 
-    if conf.pretrained:
-        model.load_state_dict(torch.load(conf.pretrained_model), strict=False)
-
+    
     return model
 
 def ResNet34(conf, **kwargs):
@@ -289,9 +287,7 @@ def ResNet34(conf, **kwargs):
     ResidualBlock = BasicBlock
     model = ResNet(ResidualBlock, [3, 4, 6, 3], conf, **kwargs)
 
-    if conf.pretrained:
-        model.load_state_dict(torch.load(conf.pretrained_model), strict=False)
-
+    
     return model
 
 def ResNet50(conf, **kwargs):
@@ -302,9 +298,7 @@ def ResNet50(conf, **kwargs):
     ResidualBlock = BasicBlock
     model = ResNet(ResidualBlock, [3, 4, 14, 3], conf, **kwargs)
 
-    if conf.pretrained:
-        model.load_state_dict(torch.load(conf.pretrained_model), strict=False)
-
+    
     return model
 
 def ResNet100(conf, **kwargs):
@@ -315,9 +309,7 @@ def ResNet100(conf, **kwargs):
     ResidualBlock = BasicBlock
     model = ResNet(ResidualBlock, [3, 13, 30, 3], conf, **kwargs)
 
-    if conf.pretrained:
-        model.load_state_dict(torch.load(conf.pretrained_model), strict=False)
-
+    
     return model
 
 def ResNet200(conf, **kwargs):
@@ -328,9 +320,7 @@ def ResNet200(conf, **kwargs):
     ResidualBlock = BasicBlock
     model = ResNet(ResidualBlock, [3, 43, 50, 3], conf, **kwargs)
 
-    if conf.pretrained:
-        model.load_state_dict(torch.load(conf.pretrained_model), strict=False)
-
+    
     return model
 
 def Encoder(conf):
