@@ -42,7 +42,7 @@ class Attention1d(nn.Module):
         dim_out = dim_in if dim_out is None else dim_out
 
         self.heads = heads
-        self.scale = dim_head ** -0.5
+        self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((heads, 1, 1))), requires_grad=True)
 
         self.to_qkv = nn.Linear(dim_in, inner_dim * 3, bias=False)
 
@@ -55,8 +55,10 @@ class Attention1d(nn.Module):
         b, n, _ = x.shape
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
+        
+        logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01))).exp()
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        dots = einsum('b h i d, b h j d -> b h i j', F.normalize(q, dim=-1),  F.normalize(k, dim=-1)) * logit_scale
         dots = dots + mask if mask is not None else dots
         attn = dots.softmax(dim=-1)
 
@@ -102,42 +104,6 @@ class Attention2d(nn.Module):
 
         return out, attn
 
-
-class Transformer(nn.Module):
-
-    def __init__(self, dim_in, dim_out=None, *,
-                 heads=8, dim_head=64, dim_mlp=1024, dropout=0.0, sd=0.0,
-                 attn=Attention1d, norm=nn.LayerNorm,
-                 f=nn.Linear, activation=nn.GELU):
-        super().__init__()
-        dim_out = dim_in if dim_out is None else dim_out
-
-        self.shortcut = []
-        if dim_in != dim_out:
-            self.shortcut.append(norm(dim_in))
-            self.shortcut.append(nn.Linear(dim_in, dim_out))
-        self.shortcut = nn.Sequential(*self.shortcut)
-
-        self.norm1 = norm(dim_in)
-        self.attn = attn(dim_in, dim_out, heads=heads, dim_head=dim_head, dropout=dropout)
-        self.sd1 = DropPath(sd) if sd > 0.0 else nn.Identity()
-
-        self.norm2 = norm(dim_out)
-        self.ff = FeedForward(dim_out, dim_mlp, dim_out, dropout=dropout, f=f, activation=activation)
-        self.sd2 = DropPath(sd) if sd > 0.0 else nn.Identity()
-
-    def forward(self, x, mask=None):
-        skip = self.shortcut(x)
-        x = self.norm1(x)
-        x, attn = self.attn(x, mask=mask)
-        x = self.sd1(x) + skip
-
-        skip = x
-        x = self.norm2(x)
-        x = self.ff(x)
-        x = self.sd2(x) + skip
-
-        return x
     
 
 class BNGAPBlock(nn.Module):
@@ -160,31 +126,6 @@ class BNGAPBlock(nn.Module):
         return x
 
 
-class MLPBlock(nn.Module):
-
-    def __init__(self, in_features, num_classes, **kwargs):
-        super(MLPBlock, self).__init__()
-
-        self.dense1 = dense(in_features, 4096)
-        self.relu1 = relu()
-        self.dropout1 = nn.Dropout(p=0.5)
-        self.dense2 = dense(4096, 4096)
-        self.relu2 = relu()
-        self.dropout2 = nn.Dropout(p=0.5)
-        self.dense3 = dense(4096, num_classes)
-
-    def forward(self, x):
-        x = x.view(x.size()[0], -1)
-        x = self.dense1(x)
-        x = self.relu1(x)
-        x = self.dropout1(x)
-        x = self.dense2(x)
-        x = self.relu2(x)
-        x = self.dropout2(x)
-        x = self.dense3(x)
-
-        return x
-    
 
 class LocalAttention(nn.Module):
 
@@ -263,8 +204,8 @@ class AttentionBlockB(nn.Module):
             x = self.relu(x)
 
         x = self.conv(x)
-        x = self.norm2(x)
         x, attn = self.attn(x)
+        x = self.norm2(x)
 
         x = self.sd(x) + skip
 

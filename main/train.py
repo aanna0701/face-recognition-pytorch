@@ -95,7 +95,7 @@ class Trainer:
         # TBoard
         self.writer = None
         if self.local_rank == 0:
-            self.writer = SummaryWriter(str(Path.cwd().parent / "TBLog"), filename_suffix=SAVE_DIR.name)
+            self.writer = SummaryWriter(str(Path.cwd().parent / "TBLog" / SAVE_DIR.name))
             str_val = ''
             for k, v in conf.items(): 
                 str_val += '{} : {}  \n'.format(k, v)

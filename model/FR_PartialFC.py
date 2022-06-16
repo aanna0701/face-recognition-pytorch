@@ -56,7 +56,7 @@ class Model(nn.Module):
             self.encoder = importlib.import_module(f"nets.resnet").Encoder(conf=conf)
             
         elif 'AlterNet' in conf.network:
-            self.encoder = importlib.import_module(f"nets.AlterNet").Encoder(conf=conf)
+            self.encoder = importlib.import_module(f"nets.AlterNet_SwinV2").Encoder(conf=conf)
             
         if conf.transfer_learning:
             print('Transferring Weight')
