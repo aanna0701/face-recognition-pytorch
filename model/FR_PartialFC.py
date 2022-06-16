@@ -62,6 +62,9 @@ class Model(nn.Module):
             
         elif 'AlterNet' in conf.network:
             self.encoder = importlib.import_module(f"nets.AlterNet_SwinV2").Encoder(conf=conf)
+            
+        elif 'Swin' in conf.network:
+            self.encoder = importlib.import_module(f"nets.SwinV2").Encoder(conf=conf)
         
         self.encoder = self.encoder.to(conf.local_rank)
         
@@ -86,11 +89,9 @@ class Model(nn.Module):
         if stage=='train':
             # DDP Setting for Encoder
             
-            print_peak_memory("Max memory allocated after creating local model", conf.local_rank)
-
-            if conf.DDP:
-                self.encoder = DDP(self.encoder, broadcast_buffers=False, device_ids=[conf.local_rank])
-                print_peak_memory("Max memory allocated after creating DDP", conf.local_rank)
+            print_peak_memory("Max memory allocated after creating local encoder", conf.local_rank)
+            self.encoder = DDP(self.encoder, broadcast_buffers=False, find_unused_parameters=True,device_ids=[conf.local_rank])
+            print_peak_memory("Max memory allocated after creating DDP", conf.local_rank)
             
             # Loading PartialFC loss          
             if conf.optimizer == 'SGD':
@@ -106,7 +107,6 @@ class Model(nn.Module):
                     
             if conf.local_rank == 0:
                 print()
-                # print(self.encoder)
                 summary(self.encoder, (3, 112, 112))
                 print()
                 print(self.loss)
@@ -158,6 +158,8 @@ class Model(nn.Module):
         img, id_ = batch
         img, id_ = img.to(self.conf.local_rank), id_.to(self.conf.local_rank)
         
+        self.opt.zero_grad()
+        
         # Encdoer forward
         self.encoder.train()
         feat = F.normalize(self.forward(img))
@@ -179,7 +181,6 @@ class Model(nn.Module):
             torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 5)
             self.opt.step()
         
-        self.opt.zero_grad()
         
         return {
             'loss': loss.cpu().detach().numpy()

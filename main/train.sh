@@ -1,4 +1,4 @@
-for m in AlterNet50
+for m in Swin50 ResNet50 AlterNet50
 do
 for r in 0.3
 do

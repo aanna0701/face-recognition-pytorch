@@ -244,20 +244,12 @@ class DATA_Module:
 
     def train_dataloader(self):
         
-        if self.conf.DDP:
-            train_sampler = DistributedSampler(self.train_dataset)
-            
-            train_loader = DataLoader(  self.train_dataset, batch_size=self.conf.b, num_workers=self.conf.num_workers, 
-                                        shuffle=False, pin_memory=True, drop_last=True, sampler=train_sampler)
-            
-            return train_loader, train_sampler
-            
-        else:
-            
-            train_loader = DataLoader(  self.train_dataset, batch_size=self.conf.b, num_workers=self.conf.num_workers, 
-                                        shuffle=False, pin_memory=True, drop_last=True)
-            
-            return train_loader
+        train_sampler = DistributedSampler(self.train_dataset)
+        
+        train_loader = DataLoader(  self.train_dataset, batch_size=self.conf.b, num_workers=self.conf.num_workers, 
+                                    shuffle=False, pin_memory=True, drop_last=True, sampler=train_sampler)
+        
+        return train_loader, train_sampler
     
     def val_dataloader(self):
         val_loader_list = list()

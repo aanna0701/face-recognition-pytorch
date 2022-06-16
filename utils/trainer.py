@@ -53,10 +53,7 @@ class Trainer:
         
         train_dm.setup(stage='train')
         
-        if self.conf.DDP:
-            train_loader, train_sampler = train_dm.train_dataloader()
-        else:
-            train_loader = train_dm.train_dataloader()
+        train_loader, train_sampler = train_dm.train_dataloader()
         
         if self.conf.local_rank == 0:
             val_dm.setup(stage='val')
@@ -73,7 +70,7 @@ class Trainer:
             train_outputs = list()
             
             # Randomly shuffle the sample index every epoch
-            train_sampler.set_epoch(epoch) if self.conf.DDP else None
+            train_sampler.set_epoch(epoch)
             
             # Mini-batch training
             print(f'{epoch+1} Epoch Traning') if self.conf.local_rank == 0 else train_loader

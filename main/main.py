@@ -32,7 +32,6 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description='train the face recognition network')
     parser.add_argument('--config', default="ms1m_arcface_122", help='name of config file without file extension')
-    # parser.add_argument('--local_rank', default=0, type=int, help='Local Rank')
     parser.add_argument('--mode', default="train", choices=['train', 'test'], help='mode of this script')
     parser.add_argument('--network', default="ResNet50", type=str, help='Backbone network')
     parser.add_argument('--loss', default="PartialFC", type=str, help='Embedding space')
@@ -98,13 +97,11 @@ def train(rank, world_size, args):
     if conf.lr_scheduler == "CosineAnnealingWarmupRestarts":
         conf.min_lr = args.lr / 1000
         
-    # conf.world_size = world_size
     conf.local_rank = local_rank
     conf.world_size = world_size
     conf.mixed_precision = args.no_mixed_precision
     conf.sample_rate = args.sample_rate
     conf.ckpt_path = args.ckpt_path
-    conf.DDP = True if conf.world_size > 1 else False
 
     # ===========================================================
     # Save directories

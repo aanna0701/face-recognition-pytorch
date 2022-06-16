@@ -13,6 +13,24 @@ from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 # Written by Ze Liu
 # --------------------------------------------------------
 
+class Mlp(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv2d(in_features, hidden_features, 1)
+        self.act = act_layer()
+        self.fc2 = nn.Conv2d(hidden_features, out_features, 1)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+    
 
 def window_partition(x, window_size):
     """
@@ -199,13 +217,7 @@ class SwinTransformerBlock(nn.Module):
         self.window_size = window_size
         self.shift_size = shift_size
         self.expansion = 1
-
-        self.shortcut = []
-        if dim != dim_out * self.expansion:
-            self.shortcut.append(conv1x1(dim, dim_out * self.expansion, stride=1))
-        self.shortcut = nn.Sequential(*self.shortcut)
-            
-        self.norm1 = norm_layer(dim)
+    
         self.activation = activation()
         
         self.attn = WindowAttention(
@@ -220,6 +232,9 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
 
+        self.mlp = Mlp(in_features=dim, out_features=dim_out, hidden_features=dim*4, act_layer=activation, drop=drop)
+        self.norm3 = norm_layer(dim)
+        
         if self.shift_size > 0:
             # calculate attention mask for SW-MSA
             H, W = self.input_resolution
@@ -248,13 +263,7 @@ class SwinTransformerBlock(nn.Module):
     def forward(self, x):
         B, C, H, W = x.size()
 
-        if len(self.shortcut) > 0:
-            x = self.norm1(x)
-            x = self.activation(x)
-            shortcut = self.shortcut(x)
-
-        else:
-            shortcut = x
+        shortcut = x
 
         x = x.permute(0, 2, 3, 1)
         # cyclic shift
@@ -283,6 +292,10 @@ class SwinTransformerBlock(nn.Module):
         x = x.permute(0 ,3, 1, 2)
         
         x = shortcut + self.drop_path(self.norm2(x))
+        
+        shortcut = x
+        x = self.mlp(x)
+        x = shortcut + self.drop_path(self.norm3(x))
 
         return x
 
@@ -357,7 +370,7 @@ def output_layer(emb_size, channel, kernel_size, dropout_rate=0.0):
 class BasicBlock(nn.Module):
     """ Implement of Residual block - IR BasicBlock architecture (https://arxiv.org/pdf/1610.02915.pdf):
 
-    This layer creates a basic residual block of AlterNet architecture, which is a pre-activation Residual Unit.
+    This layer creates a basic residual block of Swin architecture, which is a pre-activation Residual Unit.
     It consists of two 3x3 convolution layers, three batch normalization layers and one ReLU layers.
 
     Shortcut connection options:
@@ -410,7 +423,7 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     """ Implement of Residual block - IR Bottleneck architecture (https://arxiv.org/pdf/1610.02915.pdf):
 
-    This layer creates a bottleneck residual block of AlterNet architecture, which is a original Residual Unit.
+    This layer creates a bottleneck residual block of Swin architecture, which is a original Residual Unit.
     It consists of three 3x3 convolution layers, three batch normalization layers and three ReLU layers.
 
     Shortcut connection options:
@@ -469,12 +482,12 @@ class Bottleneck(nn.Module):
         return out
 
 # --------------------------------------------
-# AlterNet backbone
+# Swin backbone
 # --------------------------------------------
-class AlterNet(nn.Module):
-    """ Implement of Residual network (AlterNet) (https://arxiv.org/pdf/1512.03385.pdf):
+class Swin(nn.Module):
+    """ Implement of Residual network (Swin) (https://arxiv.org/pdf/1512.03385.pdf):
 
-    This layer creates a AlterNet model by stacking basic or bottleneck residual blocks.
+    This layer creates a Swin model by stacking basic or bottleneck residual blocks.
 
     Args:
         block: block to stack in each layer - BasicBlock or Bottleneck
@@ -482,11 +495,11 @@ class AlterNet(nn.Module):
     """
     def __init__(self, conf, 
                     block, block2,
-                    num_blocks, num_blocks2,
+                    num_blocks,
                     heads
                     ):
         # options from configuration
-        super(AlterNet, self).__init__()
+        super(Swin, self).__init__()
         self.inplanes = 64
         
         self.conv1 = conv3x3(3, self.inplanes, stride=1)
@@ -494,10 +507,10 @@ class AlterNet(nn.Module):
         self.relu = nn.ReLU()
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], num_blocks2[0], heads[0])
-        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], num_blocks2[1], heads[1], stride=2)
-        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], num_blocks2[2], heads[2], stride=2)
-        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], num_blocks2[3], heads[3], stride=2)
+        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], heads[0])
+        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], heads[1], stride=2)
+        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], heads[2], stride=2)
+        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], heads[3], stride=2)
 
         self.bn2 = nn.BatchNorm2d(block.expansion * conf.emd_size)
         self.dropout = nn.Dropout()
@@ -518,27 +531,16 @@ class AlterNet(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-    def stack_layers(self, block, block2, planes, blocks, blocks2, heads, stride=1):
-        downsample = None
-        # Peforms downsample if stride != 1 of inplanes != block.expansion
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-        
-        alt_seq = [False] * (blocks - blocks2 * 2 - 1) + [False, True] * blocks2
+    def stack_layers(self, block, block2, planes, blocks, heads, stride=1):
         layers = []
-        # For the first residual block, stride is 1 or 2
-        layers.append(block(self.inplanes, planes, stride, downsample))
+        
+        if stride > 1:
+            layers.append(nn.Conv2d(self.inplanes, planes, 2, 2, bias=False))
         
         # From the second residual block, stride is 1
         self.inplanes = planes * block.expansion
-        for is_alt in alt_seq:
-            if not is_alt:
-                layers.append(block(self.inplanes, planes))
-            else:
-                layers.append(block2(self.inplanes, planes, heads=heads))
+        for _ in range(blocks):
+            layers.append(block2(self.inplanes, planes, heads=heads))
 
         return nn.Sequential(*layers)
 
@@ -563,77 +565,77 @@ class AlterNet(nn.Module):
         return x
 
 # --------------------------------------------
-# Define AlterNet models
+# Define Swin models
 # --------------------------------------------
-def AlterNet18(conf, **kwargs):
-    """ Constructs a AlterNet-18 model
+def Swin18(conf, **kwargs):
+    """ Constructs a Swin-18 model
     Args:
         conf: configurations
     """
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[2, 2, 2, 2], num_blocks2=[0, 1, 1, 1], 
+    model = Swin(conf, ResidualBlock, MSABlock, 
+                        num_blocks=[0, 1, 1, 1], 
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
     
     return model
 
-def AlterNet34(conf, **kwargs):
-    """ Constructs a AlterNet-34 model
+def Swin34(conf, **kwargs):
+    """ Constructs a Swin-34 model
     Args:
         conf: configurations
     """
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 6, 4], num_blocks2=[0, 1, 3, 2], 
+    model = Swin(conf, ResidualBlock, MSABlock, 
+                        num_blocks=[0, 0, 4, 6], 
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
     
     return model
 
-def AlterNet50(conf, **kwargs):
-    """ Constructs a AlterNet-50 model
+def Swin50(conf, **kwargs):
+    """ Constructs a Swin-50 model
     Args:
         conf: configurations
     """
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 1, 3, 2], 
+    model = Swin(conf, ResidualBlock, MSABlock, 
+                        num_blocks=[0, 0, 4, 10], 
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
     
     return model
 
-def AlterNet100(conf, **kwargs):
-    """ Constructs a AlterNet-100 model
+def Swin100(conf, **kwargs):
+    """ Constructs a Swin-100 model
     Args:
         conf: configurations
     """
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 13, 30, 4], num_blocks2= [0, 1, 3, 2],
+    model = Swin(conf, ResidualBlock, MSABlock, 
+                        num_blocks= [0, 0, 6, 14],
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
     
     return model
 
-def AlterNet200(conf, **kwargs):
-    """ Constructs a AlterNet-100 model
+def Swin200(conf, **kwargs):
+    """ Constructs a Swin-100 model
     Args:
         conf: configurations
     """
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 43, 50, 4], num_blocks2= [0, 1, 3, 2],
+    model = Swin(conf, ResidualBlock, MSABlock, 
+                        num_blocks= [0, 0, 10, 40],
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
@@ -641,11 +643,14 @@ def AlterNet200(conf, **kwargs):
     return model
 
 def Encoder(conf):
-    if conf.network == 'AlterNet200':
-        return AlterNet200(conf)
-    elif conf.network == 'AlterNet100':
-        return AlterNet100(conf)
-    elif conf.network == 'AlterNet50':
-        return AlterNet50(conf)
-    elif conf.network == 'AlterNet34':
-        return AlterNet34(conf)
+    if conf.network == 'Swin200':
+        return Swin200(conf)
+    
+    elif conf.network == 'Swin100':
+        return Swin100(conf)
+    
+    elif conf.network == 'Swin50':
+        return Swin50(conf)
+    
+    elif conf.network == 'Swin34':
+        return Swin34(conf)
