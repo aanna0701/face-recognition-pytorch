@@ -15,33 +15,33 @@ import time
 from torch.utils.data.distributed import DistributedSampler
 
 
-class TEST_DATASET(Dataset):
-    def __init__(self, data_dir: str, transform=None):
-        super().__init__()
+# class TEST_DATASET(Dataset):
+#     def __init__(self, data_dir: str, transform=None):
+#         super().__init__()
         
-        self.data_info = pd.read_csv(str(Path(data_dir / 'suprema.csv')), header=None)
-        self.root_dir = root_dir
-        self.transform = transform
-        self.image_arr = np.asarray(self.data_info.iloc[:, 0])
-        self.label_arr = np.asarray(self.data_info.iloc[:, 1])
+#         self.data_info = pd.read_csv(str(Path(data_dir / 'suprema.csv')), header=None)
+#         self.root_dir = root_dir
+#         self.transform = transform
+#         self.image_arr = np.asarray(self.data_info.iloc[:, 0])
+#         self.label_arr = np.asarray(self.data_info.iloc[:, 1])
 
 
-    def __len__(self):
-        return len(self.data_info)
+#     def __len__(self):
+#         return len(self.data_info)
 
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
+#     def __getitem__(self, idx):
+#         if torch.is_tensor(idx):
+#             idx = idx.tolist()
 
-        # image
-        img_path = Path(self.root_dir, self.image_arr[idx])
-        image = io.imread(str(img_path))
-        image = self.transform(image)
+#         # image
+#         img_path = Path(self.root_dir, self.image_arr[idx])
+#         image = io.imread(str(img_path))
+#         image = self.transform(image)
 
-        #label
-        label = self.label_arr[idx]
+#         #label
+#         label = self.label_arr[idx]
 
-        return image, label
+#         return image, label
 
     
 
@@ -243,13 +243,21 @@ class DATA_Module:
             
 
     def train_dataloader(self):
-
-        train_sampler = DistributedSampler(self.train_dataset)
         
-        train_loader = DataLoader(  self.train_dataset, batch_size=self.conf.b, num_workers=self.conf.num_workers, 
-                                    shuffle=False, pin_memory=True, drop_last=True, sampler=train_sampler)
-        
-        return train_loader, train_sampler
+        if self.conf.DDP:
+            train_sampler = DistributedSampler(self.train_dataset)
+            
+            train_loader = DataLoader(  self.train_dataset, batch_size=self.conf.b, num_workers=self.conf.num_workers, 
+                                        shuffle=False, pin_memory=True, drop_last=True, sampler=train_sampler)
+            
+            return train_loader, train_sampler
+            
+        else:
+            
+            train_loader = DataLoader(  self.train_dataset, batch_size=self.conf.b, num_workers=self.conf.num_workers, 
+                                        shuffle=False, pin_memory=True, drop_last=True)
+            
+            return train_loader
     
     def val_dataloader(self):
         val_loader_list = list()

@@ -61,26 +61,23 @@ def train(rank, world_size, args):
     # DDP Setup
     # ===========================================================
     
-    try:
-        world_size = world_size
-        # rank = rank
-        local_rank = rank
+    world_size = world_size
+    # rank = rank
+    local_rank = rank
 
-    except KeyError:
+    if world_size > 1:     
+        print(f"Training {world_size} node single GPUs\n") if local_rank == 0 else None
+        
+    else:
         print("Training single node single GPUs\n")
-        world_size = 1
-        # rank = 0
-        local_rank = 0
         
     dist.init_process_group(
-                            backend='nccl', 
-                            init_method="tcp://127.0.0.1:12584", 
-                            rank=rank, 
-                            world_size=world_size
-                            )
-
+                        backend='nccl', 
+                        init_method="tcp://127.0.0.1:12584", 
+                        rank=rank, 
+                        world_size=world_size
+                        )
     
-
     # ===========================================================
     # Configurations
     # ===========================================================
@@ -107,6 +104,7 @@ def train(rank, world_size, args):
     conf.mixed_precision = args.no_mixed_precision
     conf.sample_rate = args.sample_rate
     conf.ckpt_path = args.ckpt_path
+    conf.DDP = True if conf.world_size > 1 else False
 
     # ===========================================================
     # Save directories
@@ -251,11 +249,15 @@ if __name__ == '__main__':
     if args.mode == 'train':
         world_size = torch.cuda.device_count()
         
-        mp.spawn(train,
-                args=(world_size, args),
-                nprocs=world_size,
-                join=True
-                )
+        if world_size > 1:
+            mp.spawn(train,
+                    args=(world_size, args),
+                    nprocs=world_size,
+                    join=True
+                    )
+        
+        else:
+            train(0, 1, args)
         
     elif args.mode == 'test':
         test(args)

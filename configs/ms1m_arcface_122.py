@@ -14,7 +14,8 @@ METRIC = ['ArcFace']
 
 OPTIMIZER = ['SGD', 'AdamW']
 
-DATA_DIR = '/workspace/dataset/FR/datasets'
+# DATA_DIR = '/workspace/dataset/FR/datasets'
+DATA_DIR = '/workspace/dataset/FR'
 
 TRAIN_DATA = ['webface42m', 'lfw', 'ms1m_arcface_122']
 
@@ -55,7 +56,7 @@ assert conf.optimizer in OPTIMIZER, 'Invalid optimizer !!!'
 # --------------------------------------------
 # Default dataset
 # --------------------------------------------
-conf.train_dataset = 'ms1m_arcface_122'
+conf.train_dataset = 'lfw'
 assert conf.train_dataset in TRAIN_DATA, 'Invalid dataset !!!'
     
 conf.n_classes = N_CLASSESE[conf.train_dataset]

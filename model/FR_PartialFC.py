@@ -88,8 +88,9 @@ class Model(nn.Module):
             
             print_peak_memory("Max memory allocated after creating local model", conf.local_rank)
 
-            self.encoder = DDP(self.encoder, broadcast_buffers=False, device_ids=[conf.local_rank])
-            print_peak_memory("Max memory allocated after creating DDP", conf.local_rank)
+            if conf.DDP:
+                self.encoder = DDP(self.encoder, broadcast_buffers=False, device_ids=[conf.local_rank])
+                print_peak_memory("Max memory allocated after creating DDP", conf.local_rank)
             
             # Loading PartialFC loss          
             if conf.optimizer == 'SGD':
