@@ -1,13 +1,13 @@
-for m in AlterNet50 ResNet50
+for m in ResNet100
 do
-for r in 1
+for r in 0.3
 do
 
 # python train.py --sample_rate ${r} --optimizer SGD --network ${m} --lr 0.1
 
 for l in 5e-4
 do
-python train.py --sample_rate ${r} --optimizer AdamW --network ${m} --lr ${l}
+CUDA_VISIBLE_DEVICES='0, 1, 2, 3, 4, 5, 6, 7, 8' python -u main.py --mode train --sample_rate ${r} --optimizer AdamW --network ${m} --lr ${l}
 done
 
 done

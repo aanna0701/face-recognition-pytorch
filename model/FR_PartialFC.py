@@ -15,7 +15,8 @@ from easydict import EasyDict as edict
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
 from torchsummary import summary
-
+from torch.distributed.optim import ZeroRedundancyOptimizer
+import itertools
 
 def print_peak_memory(prefix, device):
     if device == 0:
@@ -23,12 +24,9 @@ def print_peak_memory(prefix, device):
         
         
 class Model(nn.Module):
-    global LOGGER
 
-    def __init__(self, conf:str, logger:str =None, stage:str = 'fit'):
+    def __init__(self, conf:str, logger:str =None, stage:str = 'train'):
         super().__init__()
-        # # turn off automatic optimization
-        # self.automatic_optimization = False
         
         # ---------------------------------------
         # writers
@@ -36,7 +34,6 @@ class Model(nn.Module):
         self.conf = conf
         self.logger_ = logger
         self.epoch = 0
-        self.val_msg = edict()
         self.idx_save_image = 0
         self.lr = conf.lr
         self.starter, self.ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
@@ -44,8 +41,16 @@ class Model(nn.Module):
         self.max_level = self.conf.max_level
         self.min_level = self.conf.min_level
         
-        for val_dataset_name in conf.val_dataset:
-            self.val_msg[f'{val_dataset_name}'] = edict()
+        if stage == 'train':
+            self.val_msg = edict()
+            for val_dataset_name in conf.val_dataset:
+                self.val_msg[f'{val_dataset_name}'] = edict()
+        
+        elif stage == 'test':
+            self.test_msg = edict()
+            for test_dataset_name in conf.test_dataset:
+                self.test_msg[f'{test_dataset_name}'] = edict()
+        
         
         # ---------------------------------------
         # model
@@ -57,78 +62,85 @@ class Model(nn.Module):
             
         elif 'AlterNet' in conf.network:
             self.encoder = importlib.import_module(f"nets.AlterNet_SwinV2").Encoder(conf=conf)
+        
+        self.encoder = self.encoder.to(conf.local_rank)
+        
+        if conf.ckpt_path is not None:
+            from collections import OrderedDict
             
-        if conf.transfer_learning:
             print('Transferring Weight')
-            pre_weight = torch.load(conf.pretrained_dir, map_location='cpu')
-            self.encoder.load_state_dict(pre_weight['model_state_dict'], strict=True)
+            pre_weight = torch.load(conf.ckpt_path)['model_state_dict']
+            
+            new_pre_weight = OrderedDict()
+            for k, v in pre_weight.items():
+                name = k[7:] # remove 'module.' of DataParallel/DistributedDataParallel
+                new_pre_weight[name] = v
+                
+            self.encoder.load_state_dict(new_pre_weight, strict=True)
             del pre_weight
+            del new_pre_weight
             print('Finished')
+            
             
         # Classifier
         if stage=='train':
             # DDP Setting for Encoder
-            self.encoder = self.encoder.to(conf.local_rank)
+            
+            print_peak_memory("Max memory allocated after creating local model", conf.local_rank)
+
             self.encoder = DDP(self.encoder, broadcast_buffers=False, device_ids=[conf.local_rank])
+            print_peak_memory("Max memory allocated after creating DDP", conf.local_rank)
             
-            print_peak_memory("Max Memory Afer DDP", conf.local_rank)
-            
-            # Loading PartialFC loss
-            self.loss = nn.ModuleList()
-            
-            
-            for i in range(len(conf.train_dataset)):
-                if conf.optimizer == 'SGD':
-                    self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFC(conf=conf, 
-                                                                                            num_classes=conf.n_classes[i]
-                                                                                            ))
-                elif conf.optimizer == 'AdamW':
-                    self.loss.append(importlib.import_module(f"nets.{conf.loss}").PartialFCAdamW(conf=conf, 
-                                                                                                num_classes=conf.n_classes[i]
-                                                                                                ))
+            # Loading PartialFC loss          
+            if conf.optimizer == 'SGD':
+                self.loss = importlib.import_module(f"nets.{conf.loss}").PartialFC( conf=conf, 
+                                                                                    num_classes=conf.n_classes
+                                                                                    )
+            elif conf.optimizer == 'AdamW':
+                self.loss = importlib.import_module(f"nets.{conf.loss}").PartialFCAdamW(conf=conf, 
+                                                                                        num_classes=conf.n_classes
+                                                                                        )
+
+            self.loss.train().to(conf.local_rank)
                     
             if conf.local_rank == 0:
                 print()
                 # print(self.encoder)
                 summary(self.encoder, (3, 112, 112))
                 print()
-                print(self.loss[0])
+                print(self.loss)
                 print()
             
             # Initializing Optimizers and Schedulers
-            self.opts, self.schs = self.configure_optimizers()
+            self.opt, self.sch = self.configure_optimizers()
             
-        else:
-            weight = torch.load(str(Path(conf.weight_path)), map_location='cpu')
-            self.encoder.load_state_dict(weight, strict=True)
-            del weight
             
-        # ---------------------------------------
-        # Criterion
-        # ---------------------------------------
-        self.criterion = nn.CrossEntropyLoss()
-        
-        
-        # ---------------------------------------
-        # Metrics
-        # ---------------------------------------
-        self.train_acc = torchmetrics.Accuracy()
-        
-        # ---------------------------------------
-        # Save Path
-        # ---------------------------------------
-        self.save_path = Path(logger).parent
-        
-        # ---------------------------------------
-        # Mixed precision
-        # ---------------------------------------
-        if conf.mixed_precision:
-            # self.grad_amp = MaxClipGradScaler(conf.b, 128 * conf.b)
-            self.amp = torch.cuda.amp.grad_scaler.GradScaler(growth_interval=100)
-            print('Mixed Precision !!!\n')
-        
-        
-        
+            # ---------------------------------------
+            # Criterion
+            # ---------------------------------------
+            self.criterion = nn.CrossEntropyLoss()
+            
+            
+            # ---------------------------------------
+            # Metrics
+            # ---------------------------------------
+            self.train_acc = torchmetrics.Accuracy()
+            
+            
+            # ---------------------------------------
+            # Save Path
+            # ---------------------------------------
+            self.save_path = Path(logger).parent if conf.local_rank == 0 else None
+            
+            
+            # ---------------------------------------
+            # Mixed precision
+            # ---------------------------------------
+            if conf.mixed_precision:
+                self.amp = torch.cuda.amp.grad_scaler.GradScaler(growth_interval=100)
+                print('Mixed Precision !!!\n') if conf.local_rank == 0 else None
+            
+            
     # --------------------------------------------
     # forward
     # --------------------------------------------
@@ -140,7 +152,7 @@ class Model(nn.Module):
     # --------------------------------------------
     # training
     # --------------------------------------------
-    def training_step(self, batch, train_set_idx):
+    def training_step(self, batch):
         # inputs
         img, id_ = batch
         img, id_ = img.to(self.conf.local_rank), id_.to(self.conf.local_rank)
@@ -150,23 +162,23 @@ class Model(nn.Module):
         feat = F.normalize(self.forward(img))
         
         # PartialFC forward and backward
-        self.loss[train_set_idx].train().cuda()
-        loss = self.loss[train_set_idx](feat, id_, self.opts[train_set_idx])
+        self.loss.train().cuda()
+        loss = self.loss(feat, id_, self.opt)
         
         # Encoder backward
         if self.conf.mixed_precision:
             self.amp.scale(loss).backward()
-            self.amp.unscale_(self.opts[train_set_idx])
+            self.amp.unscale_(self.opt)
             torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 5)
-            self.amp.step(self.opts[train_set_idx])
+            self.amp.step(self.opt)
             self.amp.update()
             
         else:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 5)
-            self.opts[train_set_idx].step()
+            self.opt.step()
         
-        self.opts[train_set_idx].zero_grad()
+        self.opt.zero_grad()
         
         return {
             'loss': loss.cpu().detach().numpy()
@@ -176,6 +188,7 @@ class Model(nn.Module):
     def _shared_eval_step(self, batch, dataset_name, prefix):
         # batch input
         pair, label = batch
+        pair, label = pair.to(self.conf.local_rank), label.to(self.conf.local_rank)
         pair = rearrange(pair, 'b p c h w -> (b p) c h w')
         
         # inference time counter
@@ -202,8 +215,8 @@ class Model(nn.Module):
             f'{dataset_name}_infer_time': infer_time,
             f'{dataset_name}_label_list': label.cpu().numpy()
             }
-
-
+        
+        
     # --------------------------------------------
     # Validation Step
     # --------------------------------------------
@@ -249,100 +262,143 @@ class Model(nn.Module):
     # --------------------------------------------
     # training epoch end
     # --------------------------------------------
-    def training_epoch_end(self, outputs, train_set_idx, running_t=None):
+    
+    def training_epoch_end(self, outputs, running_t=None):
         ## Print train results
+        if self.conf.local_rank == 0:
         # train loss
-        train_loss = np.stack([x["loss"] for x in outputs]).mean()
-        # learning rate
-        lr = self.schs[train_set_idx].get_last_lr()[0]
-        # epoch
-        epoch = self.epoch + 1
+            train_loss = np.stack([x["loss"] for x in outputs]).mean()
+            # learning rate
+            lr = self.sch.get_last_lr()[0]
+            # epoch
+            epoch = self.epoch + 1
         
-        # evaluation
-        msg = '='*50 
-        msg += f'\n[Training with "{self.conf.train_dataset[train_set_idx]}"]\n' + \
-                f'- Epoch {epoch}/{self.conf.num_epoch}\n' + \
-                f'- Learning Rate: {lr}\n' + \
-                f'- Train Loss: {train_loss:.4f}\n'
-        if running_t is not None:
-            msg += f'- Training Time per Epoch: {running_t:.2f}s'
-        
-        val_acc = None
-        
-        if epoch % self.conf.valid_freq == 0:
-            val_acc = edict()
-            for val_dataset_name in self.val_msg:
-                val_acc[val_dataset_name] = self.val_msg[val_dataset_name].acc
-                
-                msg += '\n'.join([
-                            f'\n\n[Validation with "{val_dataset_name}"]',
-                            f'- Val Accuracy: {self.val_msg[val_dataset_name].acc:.2f}%',
-                            f'- Val Inference Time: {self.val_msg[val_dataset_name].infer_time:.2f}ms\n'
-                            ])
-                msg += self.val_msg[val_dataset_name].roc
-        
-        msg += '='*50 + '\n'
-        # print & log train log
-        print(msg) if self.logger_ is None else print_log(self.logger_, msg)
+            # evaluation
+            msg = '='*50 
+            msg += f'\n[Training with "{self.conf.train_dataset}"]\n' + \
+                    f'- Epoch {epoch}/{self.conf.num_epoch}\n' + \
+                    f'- Learning Rate: {lr}\n' + \
+                    f'- Train Loss: {train_loss:.4f}\n'
+            if running_t is not None:
+                msg += f'- Training Time per Epoch: {running_t:.2f}s\n'
             
-        # tensorboard log
+            val_acc = None
+            
+            if epoch % self.conf.valid_freq == 0:
+                val_acc = edict()
+                for val_dataset_name in self.val_msg:
+                    val_acc[val_dataset_name] = self.val_msg[val_dataset_name].acc
+                    
+                    msg += '\n'.join([
+                                f'\n\n[Validation with "{val_dataset_name}"]',
+                                f'- Val Accuracy: {self.val_msg[val_dataset_name].acc:.2f}%',
+                                f'- Val Inference Time: {self.val_msg[val_dataset_name].infer_time:.2f}ms\n'
+                                ])
+                    msg += self.val_msg[val_dataset_name].roc
+            
+            msg += '='*50 + '\n'
+            # print & log train log
+            print(msg) if self.logger_ is None else print_log(self.logger_, msg)
+                
+            # tensorboard log
+            
+            self.epoch += 1
         
-        self.epoch += 1
+        self.sch.step()
         
-        self.schs[train_set_idx].step()
+        if self.conf.local_rank == 0:
+            return {
+                        'lr': lr,
+                        'train_loss': train_loss,
+                        'val_acc': val_acc
+                    }
+            
+            
+    # --------------------------------------------
+    # Test Step
+    # --------------------------------------------
+    
+    def test_step(self, batch, dataset_idx):
+        
+        dataset_name = self.conf.test_dataset[dataset_idx]
+        eval_step = self._shared_eval_step(batch, dataset_name, 'test')
         
         return {
-                    'lr': lr,
-                    'train_loss': train_loss,
-                    'val_acc': val_acc
-                }
+            f'{dataset_name}_embedding_1': eval_step[f'{dataset_name}_embedding_1'], 
+            f'{dataset_name}_embedding_2': eval_step[f'{dataset_name}_embedding_2'],
+            f'{dataset_name}_infer_time': eval_step[f'{dataset_name}_infer_time'], 
+            f'{dataset_name}_label_list': eval_step[f'{dataset_name}_label_list'],
+            'dataset_name': dataset_name
+        }
         
-
+    def test_epoch_end(self, outputs):
+        infer_time_list = list()         
+        label_list = list()         
+        embedding_1_list = list()
+        embedding_2_list = list()
+        
+        for output in outputs:
+            dataset_name = output['dataset_name']
+            infer_time_list.append(output[f'{dataset_name}_infer_time'])
+            label_list.append(output[f'{dataset_name}_label_list'])
+            embedding_1_list.append(output[f'{dataset_name}_embedding_1'])
+            embedding_2_list.append(output[f'{dataset_name}_embedding_2'])
+            
+        infer_time= np.array(infer_time_list).mean()
+        labels = np.concatenate(label_list)
+        embedding_1 = np.concatenate(embedding_1_list)
+        embedding_2 = np.concatenate(embedding_2_list)
+        
+        roc, acc = performance(embedding_1, embedding_2, labels, min_level=self.min_level, max_level=self.max_level)
+        
+        self.test_msg[f'{dataset_name}'].acc = acc
+        self.test_msg[f'{dataset_name}'].infer_time = infer_time
+        self.test_msg[f'{dataset_name}'].roc = roc
+        
+        
+        
     # --------------------------------------------
     # optimization
     # --------------------------------------------
     def configure_optimizers(self): 
-        opt = list()
-        sch = list()
         
-        for loss in self.loss:
-            ## Optimizer
-            if self.conf.optimizer == 'AdamW':
-                opt.append(torch.optim.AdamW([{'params': self.encoder.parameters()}, {'params': loss.parameters()}], 
-                                                lr=self.lr,
-                                                weight_decay=self.conf.wd,
-                                                eps=self.conf.eps,
-                                                betas=self.conf.betas
-                                                ))
-                
-            elif self.conf.optimizer == 'SGD':
-                opt.append(torch.optim.SGD([{'params': self.encoder.parameters()}, {'params': loss.parameters()}], 
-                                                lr=self.lr, 
-                                                momentum=self.conf.mom, 
-                                                weight_decay=self.conf.wd))
-        
-            ## Scheduler
-            if self.conf.lr_scheduler == 'CosineAnnealingWarmupRestarts':
-                sch.append(importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
-                                                                                                    opt[-1],
-                                                                                                    first_cycle_steps=self.conf.num_epoch, 
-                                                                                                    warmup_steps=self.conf.warmup_steps,
-                                                                                                    min_lr=self.conf.min_lr,
-                                                                                                    max_lr=self.lr))
-                
-            elif self.conf.lr_scheduler == 'MultiStep':
-                sch.append(optim.lr_scheduler.MultiStepLR(opt.loss[-1], milestones=self.conf.lr_decay_epoch, gamma=self.conf.lr_decay_ratio))
-                
-            elif self.conf.lr_scheduler == 'StepLR':
-                sch.append(optim.lr_scheduler.StepLR(opt.loss[-1], step_size=self.conf.lr_decay_epoch_size, gamma=self.conf.lr_decay_ratio))
-                
-        
-        msg = '\n'+ '='*50 + '\n'
-        msg += '* Optimizer and Scheduler *\n'
-        msg += f'- The Number of Optimizers: {len(opt)}\n'
-        msg += f'- The Number of Schedulers: {len(sch)}\n'
-        msg += '='*50 + '\n'
-        print(msg) if self.logger_ is None else print_log(self.logger_, msg)
+        ## Optimizer
+        if self.conf.optimizer == 'AdamW':
+            opt = torch.optim.AdamW(    [{'params': self.encoder.parameters()}, {'params': self.loss.parameters()}], 
+                                        lr=self.lr,
+                                        weight_decay=self.conf.wd,
+                                        eps=self.conf.eps,
+                                        betas=self.conf.betas
+                                        )
+            
+        elif self.conf.optimizer == 'SGD':
+            opt = torch.optim.SGD(  [{'params': self.encoder.parameters()}, {'params': self.loss.parameters()}], 
+                                    lr=self.lr, 
+                                    momentum=self.conf.mom, 
+                                    weight_decay=self.conf.wd   )
+    
+        ## Scheduler
+        if self.conf.lr_scheduler == 'CosineAnnealingWarmupRestarts':
+            sch = importlib.import_module("utils.scheduler").CosineAnnealingWarmupRestarts(
+                                                                                            opt,
+                                                                                            first_cycle_steps=self.conf.num_epoch, 
+                                                                                            warmup_steps=self.conf.warmup_steps,
+                                                                                            min_lr=self.conf.min_lr,
+                                                                                            max_lr=self.lr)
+            
+        elif self.conf.lr_scheduler == 'MultiStep':
+            sch = optim.lr_scheduler.MultiStepLR(opt, milestones=self.conf.lr_decay_epoch, gamma=self.conf.lr_decay_ratio)
+            
+        elif self.conf.lr_scheduler == 'StepLR':
+            sch = optim.lr_scheduler.StepLR(opt, step_size=self.conf.lr_decay_epoch_size, gamma=self.conf.lr_decay_ratio)
+            
+        if self.conf.local_rank == 0:
+            msg = '\n'+ '='*50 + '\n'
+            msg += '* Optimizer and Scheduler *\n'
+            msg += f'- Optimizers: {opt}\n'
+            msg += f'- Schedulers: {sch}\n'
+            msg += '='*50 + '\n'
+            print(msg) if self.logger_ is None else print_log(self.logger_, msg)
         
         return opt, sch
     

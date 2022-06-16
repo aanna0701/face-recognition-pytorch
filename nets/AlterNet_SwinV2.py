@@ -498,7 +498,7 @@ def AlterNet18(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = AttentionBasicBlockB
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[2, 2, 2, 2], num_blocks2=[0, 1, 1, 2], 
+                        num_blocks=[2, 2, 2, 2], num_blocks2=[0, 1, 1, 1], 
                         heads=(3, 6, 12, 24),
                         **kwargs)
 
@@ -513,7 +513,7 @@ def AlterNet34(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = AttentionBasicBlockB
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 6, 3], num_blocks2=[0, 1, 1, 2], 
+                        num_blocks=[3, 4, 6, 4], num_blocks2=[0, 1, 3, 2], 
                         heads=(3, 6, 12, 24),
                         **kwargs)
 
@@ -528,7 +528,7 @@ def AlterNet50(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = AttentionBasicBlockB
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 14, 3], num_blocks2=[0, 1, 1, 2], 
+                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 1, 3, 2], 
                         heads=(3, 6, 12, 24),
                         **kwargs)
 
@@ -543,7 +543,7 @@ def AlterNet100(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = AttentionBasicBlockB
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 13, 30, 3], num_blocks2= [0, 1, 1, 2],
+                        num_blocks=[3, 13, 30, 4], num_blocks2= [0, 1, 3, 2],
                         heads=(3, 6, 12, 24),
                         **kwargs)
 
@@ -558,7 +558,7 @@ def AlterNet200(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = AttentionBasicBlockB
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 43, 50, 3], num_blocks2= [0, 1, 1, 2],
+                        num_blocks=[3, 43, 50, 4], num_blocks2= [0, 1, 3, 2],
                         heads=(3, 6, 12, 24),
                         **kwargs)
 

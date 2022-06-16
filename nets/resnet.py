@@ -285,7 +285,7 @@ def ResNet34(conf, **kwargs):
         conf: configurations
     """
     ResidualBlock = BasicBlock
-    model = ResNet(ResidualBlock, [3, 4, 6, 3], conf, **kwargs)
+    model = ResNet(ResidualBlock, [3, 4, 6, 4], conf, **kwargs)
 
     
     return model
@@ -296,7 +296,7 @@ def ResNet50(conf, **kwargs):
         conf: configurations
     """
     ResidualBlock = BasicBlock
-    model = ResNet(ResidualBlock, [3, 4, 14, 3], conf, **kwargs)
+    model = ResNet(ResidualBlock, [3, 4, 14, 4], conf, **kwargs)
 
     
     return model
@@ -307,7 +307,7 @@ def ResNet100(conf, **kwargs):
         conf: configurations
     """
     ResidualBlock = BasicBlock
-    model = ResNet(ResidualBlock, [3, 13, 30, 3], conf, **kwargs)
+    model = ResNet(ResidualBlock, [3, 13, 30, 4], conf, **kwargs)
 
     
     return model
@@ -318,7 +318,7 @@ def ResNet200(conf, **kwargs):
         conf: configurations
     """
     ResidualBlock = BasicBlock
-    model = ResNet(ResidualBlock, [3, 43, 50, 3], conf, **kwargs)
+    model = ResNet(ResidualBlock, [3, 43, 50, 4], conf, **kwargs)
 
     
     return model
