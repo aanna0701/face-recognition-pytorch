@@ -10,7 +10,6 @@ import torch.optim as optim
 import numpy as np
 import time
 from einops import rearrange
-from utils.eval import performance
 from easydict import EasyDict as edict
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
@@ -124,15 +123,23 @@ class Trainer:
                 
             for test_idx, test_loader in enumerate(test_loader):
                 
-                test_outputs = list()
+                
                 print(f'{test_idx+1}th Test Dataset') 
                 # Valdiation per Val Dataset
-                for batch in tqdm(test_loader):
-                    test_outputs.append(model.test_step(batch, test_idx))
-                    
-                # Summary Validation Results of Each Dataset
-                model.test_epoch_end(test_outputs)
-                
+                if self.conf.test_type == 'pair':
+                    for batch in tqdm(test_loader):
+                        test_outputs = list()
+                        test_outputs.append(model.test_step(batch, test_idx))
+                        
+                    # Summary Validation Results of Each Dataset
+                    model.test_epoch_end(test_outputs)
+                else:
+                    cross_test_outputs = list()
+                    for batch in tqdm(test_loader):
+                        cross_test_outputs.append(model.cross_test_step(batch, test_idx))
+                        
+                    # Summary Validation Results of Each Dataset
+                    model.cross_test_epoch_end(cross_test_outputs)
             
             # evaluation
             msg = '='*50         
@@ -140,8 +147,6 @@ class Trainer:
             
             test_acc = edict()
             for test_dataset_name in model.test_msg:
-                test_acc[test_dataset_name] = model.test_msg[test_dataset_name].acc
-                
                 msg += '\n'.join([
                             f'\n\n[Test with "{test_dataset_name}"]',
                             f'- Test Accuracy: {model.test_msg[test_dataset_name].acc:.2f}%',

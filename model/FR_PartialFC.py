@@ -10,7 +10,7 @@ import torch.optim as optim
 import numpy as np
 import time
 from einops import rearrange
-from utils.eval import performance
+from utils.eval import performance_roc, cross_score, pair_score, performance_acc
 from easydict import EasyDict as edict
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
@@ -48,8 +48,13 @@ class Model(nn.Module):
         
         elif stage == 'test':
             self.test_msg = edict()
-            for test_dataset_name in conf.test_dataset:
-                self.test_msg[f'{test_dataset_name}'] = edict()
+            if conf.test_type == 'cross':
+                for test_dataset_name in conf.cross_test_dataset:
+                    self.test_msg[f'{test_dataset_name}'] = edict()
+            
+            elif conf.test_type == 'pair':
+                for test_dataset_name in conf.test_dataset:
+                    self.test_msg[f'{test_dataset_name}'] = edict()
         
         
         # ---------------------------------------
@@ -254,7 +259,10 @@ class Model(nn.Module):
         embedding_1 = np.concatenate(embedding_1_list)
         embedding_2 = np.concatenate(embedding_2_list)
         
-        roc, acc = performance(embedding_1, embedding_2, labels, min_level=self.min_level, max_level=self.max_level)
+        hist_genuine, hist_imposter, score_list = pair_score(embedding_1, embedding_2, labels)
+        
+        roc, eer_th = performance_roc(hist_genuine, hist_imposter, min_level=self.min_level, max_level=self.max_level)
+        acc = performance_acc(score_list, labels, eer_th)
         
         self.val_msg[f'{dataset_name}'].acc = acc
         self.val_msg[f'{dataset_name}'].infer_time = infer_time
@@ -340,6 +348,7 @@ class Model(nn.Module):
         embedding_2_list = list()
         
         for output in outputs:
+            ##########################
             dataset_name = output['dataset_name']
             infer_time_list.append(output[f'{dataset_name}_infer_time'])
             label_list.append(output[f'{dataset_name}_label_list'])
@@ -351,7 +360,64 @@ class Model(nn.Module):
         embedding_1 = np.concatenate(embedding_1_list)
         embedding_2 = np.concatenate(embedding_2_list)
         
-        roc, acc = performance(embedding_1, embedding_2, labels, min_level=self.min_level, max_level=self.max_level)
+        hist_genuine, hist_imposter, score_list = pair_score(embedding_1, embedding_2, labels)
+        
+        roc, eer_th = performance_roc(hist_genuine, hist_imposter, min_level=self.min_level, max_level=self.max_level)
+        acc = performance_acc(score_list, labels, eer_th)
+        
+        self.test_msg[f'{dataset_name}'].acc = acc
+        self.test_msg[f'{dataset_name}'].infer_time = infer_time
+        self.test_msg[f'{dataset_name}'].roc = roc
+        
+    # --------------------------------------------
+    # Cross-matching Test Step
+    # --------------------------------------------        
+    
+    def cross_test_step(self, batch, dataset_idx):
+        
+        dataset_name = self.conf.cross_test_dataset[dataset_idx]
+        
+        img, label = batch
+        img, label = img.to(self.conf.local_rank), label.to(self.conf.local_rank)
+        
+        start = time.time()
+        
+        with torch.no_grad():
+            feat = self.forward(img)
+            embedding = F.normalize(feat)
+        
+        infer_time = time.time() - start
+        
+        return {
+            f'{dataset_name}_embedding': embedding.cpu(), 
+            f'{dataset_name}_infer_time': infer_time, 
+            f'{dataset_name}_label_list': label.cpu(),
+            'dataset_name': dataset_name
+        }
+        
+    def cross_test_epoch_end(self, outputs):
+        
+        infer_time_list = list()         
+        label_list = list()         
+        embed_list = list()
+        
+        for output in outputs:
+            dataset_name = output['dataset_name']
+            embed_list.append(output[f'{dataset_name}_embedding'])
+            label_list.append(output[f'{dataset_name}_label_list'])
+            infer_time_list.append(output[f'{dataset_name}_infer_time'])
+            
+        infer_time= np.array(infer_time_list).mean()
+        labels = np.concatenate(label_list)
+        embeds = np.concatenate(embed_list)
+        
+        hist_genuine, hist_imposter, score_list, label_list = cross_score(
+                                                                            embeds, 
+                                                                            labels
+                                                                            )
+        
+        roc, eer_th = performance_roc(hist_genuine, hist_imposter, min_level=self.min_level, max_level=self.max_level)
+        acc = performance_acc(score_list, label_list, eer_th)
         
         self.test_msg[f'{dataset_name}'].acc = acc
         self.test_msg[f'{dataset_name}'].infer_time = infer_time

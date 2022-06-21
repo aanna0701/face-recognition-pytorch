@@ -603,7 +603,7 @@ def AlterNet50(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 1, 3, 2], 
+                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 1, 7, 2], 
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
@@ -618,7 +618,7 @@ def AlterNet100(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 13, 30, 4], num_blocks2= [0, 1, 3, 2],
+                        num_blocks=[3, 13, 30, 4], num_blocks2= [0, 1, 5, 2],
                         heads=(2, 4, 8, 16),
                         **kwargs)
 

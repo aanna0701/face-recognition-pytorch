@@ -40,6 +40,7 @@ def parse_args():
     parser.add_argument('--no_mixed_precision', action='store_false')
     parser.add_argument('--sample_rate', default=0.3, type=float)
     parser.add_argument('--ckpt_path', type=str)
+    parser.add_argument('--test_type', default='pair', type=str, choices=['pair', 'cross'])
 
     args = parser.parse_args()
 
@@ -133,8 +134,11 @@ def train(rank, world_size, args):
         for k in conf: msg_conf += f"{k} = {conf[k]}" + "\n"
         msg_conf += '='*50
         print_log(LOGGER, msg_conf)
+        
+        with open(SAVE_DIR / f'{args.config}_config.txt', "w") as file:
+            file.write(msg_conf)
+            
         del msg_conf
-        copyfile(Path.cwd().parent / 'configs' / f'{args.config}.py', SAVE_DIR / f'{args.config}.py')
     
     
     # ===========================================================
@@ -181,6 +185,7 @@ def test(args):
     conf.network = args.network
     conf.ckpt_path = args.ckpt_path
     assert conf.network in config.NETWORK, 'Invalid model !!!'
+    conf.test_type = args.test_type
     
     config.generate_config(conf.network, conf.loss, conf.optimizer, conf.lr_scheduler)
     
@@ -190,7 +195,7 @@ def test(args):
     # ===========================================================   
     
     SAVE_DIR = Path.cwd().parent / 'save' / f'{args.mode}_{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
-    ckpt_path = conf.ckpt_path[-5:-4].split('/')
+    ckpt_path = conf.ckpt_path[:-4].split('/')
     SAVE_DIR = SAVE_DIR / '_'.join(ckpt_path)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     LOGGER = str(SAVE_DIR / 'log.txt')
@@ -205,8 +210,11 @@ def test(args):
     for k in conf: msg_conf += f"{k} = {conf[k]}" + "\n"
     msg_conf += '='*50
     print_log(LOGGER, msg_conf)
+    
+    with open(SAVE_DIR / f'{args.config}_config.txt', "w") as file:
+            file.write(msg_conf)
+            
     del msg_conf
-    copyfile(Path.cwd().parent / 'configs' / f'{args.config}.py', SAVE_DIR / f'{args.config}.py')
     
     
     # ===========================================================

@@ -13,35 +13,47 @@ from typing import Any, Callable, Optional, Tuple
 from torchvision.datasets.folder import DatasetFolder, default_loader, IMG_EXTENSIONS
 import time
 from torch.utils.data.distributed import DistributedSampler
+import pandas as pd
+from skimage import io
 
-
-# class TEST_DATASET(Dataset):
-#     def __init__(self, data_dir: str, transform=None):
-#         super().__init__()
+class TEST_DATASET(Dataset):
+    def __init__(self, data_dir: str, conf=None):
+        super().__init__()
         
-#         self.data_info = pd.read_csv(str(Path(data_dir / 'suprema.csv')), header=None)
-#         self.root_dir = root_dir
-#         self.transform = transform
-#         self.image_arr = np.asarray(self.data_info.iloc[:, 0])
-#         self.label_arr = np.asarray(self.data_info.iloc[:, 1])
+        dataset_name = data_dir.split('/')[-1]
+        self.data_dir = Path(data_dir) / 'imgs'
+        self.data_info = pd.read_csv(str(self.data_dir / f'{dataset_name}.csv'), header=None)
+        self.image_arr = np.asarray(self.data_info.iloc[:, 0])
+        self.label_arr = np.asarray(self.data_info.iloc[:, 1])
+        self.transform = self.make_transform()
 
+    def __len__(self):
+        return len(self.data_info)
 
-#     def __len__(self):
-#         return len(self.data_info)
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
 
-#     def __getitem__(self, idx):
-#         if torch.is_tensor(idx):
-#             idx = idx.tolist()
+        # image
+        img_path = self.data_dir / self.image_arr[idx]
+        image = io.imread(str(img_path))
+        image = self.transform(image=image)["image"]
 
-#         # image
-#         img_path = Path(self.root_dir, self.image_arr[idx])
-#         image = io.imread(str(img_path))
-#         image = self.transform(image)
+        #label
+        label = self.label_arr[idx]
 
-#         #label
-#         label = self.label_arr[idx]
-
-#         return image, label
+        return image, label
+    
+    def make_transform(self):
+        img_transform = list()
+        
+        img_transform.append(alb.Resize(112, 112))
+        img_transform.append(alb.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]))
+        img_transform.append(alp.transforms.ToTensorV2())
+        
+        img_transform = alb.Compose(img_transform)
+        
+        return img_transform
 
     
 
@@ -173,8 +185,8 @@ class DATA_Module:
             self.n_classes = self.conf.n_classes
             self.train_dataset_name = Path(self.conf.train_dataset_dir).name   
                 
-            msg += f'- The Number of Training Images of "{self.train_dataset_name}": {self.train_dataset.__len__()}\n'
-            msg += f'- The Number of Training Classes of "{self.train_dataset_name}": {self.n_classes} \n' 
+            msg += f'- The Number of Training Images in the "{self.train_dataset_name}": {self.train_dataset.__len__()}\n'
+            msg += f'- The Number of Training Classes in the "{self.train_dataset_name}": {self.n_classes} \n' 
                 
 
             if self.conf.local_rank == 0:
@@ -201,7 +213,7 @@ class DATA_Module:
                 self.val_dataset.append(VAL_DATASET_BYTE(data_dir=data_dir, conf=self.conf))
                 self.val_dataset_name.append(Path(data_dir).name)
                 
-                msg += f'- The Number of Validation Pairs of "{self.val_dataset_name[-1]}": {self.val_dataset[-1].__len__()} ' + '\n'
+                msg += f'- The Number of Validation Pairs in the "{self.val_dataset_name[-1]}": {self.val_dataset[-1].__len__()} ' + '\n'
             
             if self.conf.local_rank == 0:
                 if self.logger_ is None:
@@ -223,14 +235,24 @@ class DATA_Module:
             self.test_dataset_name = list()
             msg = '* Test Dataset info *\n'
             
+            if self.conf.test_type == 'cross':
+                test_dataset_dirs = self.conf.cross_test_dataset_dir
+                
+            elif self.conf.test_type == 'pair':
+                test_dataset_dirs = self.conf.test_dataset_dir
+            
             start_t = time.time()
-            for data_dir in self.conf.test_dataset_dir:
-                self.test_dataset.append(VAL_DATASET_BYTE(data_dir=data_dir, conf=self.conf))
+            for data_dir in test_dataset_dirs:
+                if self.conf.test_type == 'cross':
+                    self.test_dataset.append(TEST_DATASET(data_dir=data_dir, conf=self.conf))
+                elif self.conf.test_type == 'pair':
+                    self.test_dataset.append(VAL_DATASET_BYTE(data_dir=data_dir, conf=self.conf))
+                
                 self.test_dataset_name.append(Path(data_dir).name)
                 
-                msg += f'- The Number of Test Pairs of "{self.test_dataset_name[-1]}": {self.test_dataset[-1].__len__()} ' + '\n'
+                msg += f'- The Number of Test Images in the "{self.test_dataset_name[-1]}": {self.test_dataset[-1].__len__()} ' + '\n'
             
-        
+            
             if self.logger_ is None:
                 print(msg)   
                 print(f"Loading time: {time.time() - start_t:.4f}s")   
