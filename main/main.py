@@ -108,7 +108,7 @@ def train(rank, world_size, args):
     # Save directories
     # ===========================================================   
     
-    SAVE_DIR = Path.cwd().parent / 'save' / f'{args.mode}_{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
+    SAVE_DIR = Path.cwd().parent / 'save' / f'{args.mode}' / f'{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
     SAVE_DIR = SAVE_DIR.parent / ('_'.join(
                                         [
                                             SAVE_DIR.name, 
@@ -194,7 +194,7 @@ def test(args):
     # Save directories
     # ===========================================================   
     
-    SAVE_DIR = Path.cwd().parent / 'save' / f'{args.mode}_{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
+    SAVE_DIR = Path.cwd().parent / 'save' / f'{args.test_type}_{args.mode}' / f'{now.tm_mon}-{now.tm_mday}_{now.tm_hour}h{now.tm_min}m-{now.tm_sec}s'
     ckpt_path = conf.ckpt_path[:-4].split('/')
     SAVE_DIR = SAVE_DIR / '_'.join(ckpt_path)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
