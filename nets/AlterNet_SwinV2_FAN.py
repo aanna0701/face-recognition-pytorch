@@ -7,10 +7,10 @@ import torch.nn.functional as F
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import torch.jit
 import math
+from einops import rearrange
 
 class ChannelProcessing(nn.Module):
-    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., linear=False, drop_path=0., 
-                 mlp_hidden_dim=None, act_layer=nn.GELU, drop=None, norm_layer=nn.LayerNorm, cha_sr_ratio=1):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., cha_sr_ratio=1):
         super().__init__()
         assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
 
@@ -19,11 +19,6 @@ class ChannelProcessing(nn.Module):
         self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
 
         self.cha_sr_ratio = cha_sr_ratio if num_heads > 1 else 1
-
-        # config of mlp for v processing
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.mlp_v = Mlp(in_features=dim//self.cha_sr_ratio, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop, linear=linear)
-        self.norm_v = norm_layer(dim//self.cha_sr_ratio)
 
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
 
@@ -52,8 +47,10 @@ class ChannelProcessing(nn.Module):
         
         attn = torch.nn.functional.sigmoid(q @ k)
         return attn  * self.temperature
-    def forward(self, x, H, W, atten=None):
+    def forward(self, x):
+        x = rearrange(x, 'b c h w -> b (h w) c')
         B, N, C = x.shape
+        
         v = x.reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
         q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
@@ -62,13 +59,16 @@ class ChannelProcessing(nn.Module):
         attn = self._gen_attn(q, k)
         attn = self.attn_drop(attn)
 
-        Bv, Hd, Nv, Cv = v.shape
-        v = self.norm_v(self.mlp_v(v.transpose(1, 2).reshape(Bv, Nv, Hd*Cv), H, W)).reshape(Bv, Nv, Hd, Cv).transpose(1, 2)
-
         repeat_time = N // attn.shape[-1]
         attn = attn.repeat_interleave(repeat_time, dim=-1) if attn.shape[-1] > 1 else attn
+        
         x = (attn * v.transpose(-1, -2)).permute(0, 3, 1, 2).reshape(B, N, C)
-        return x,  (attn * v.transpose(-1, -2)).transpose(-1, -2) #attn
+        
+        x = rearrange(x, 'b (h w) c -> b c h w', h=int(math.sqrt(N)))
+        
+        return x
+    
+    
     @torch.jit.ignore
     def no_weight_decay(self):
         return {'temperature'}
@@ -338,9 +338,11 @@ class SwinTransformerBlock(nn.Module):
         self.shortcut = []
         if dim != dim_out * self.expansion:
             self.shortcut.append(conv1x1(dim, dim_out * self.expansion, stride=1))
+            self.norm1 = norm_layer(dim)
+            
         self.shortcut = nn.Sequential(*self.shortcut)
             
-        self.norm1 = norm_layer(dim)
+        
         self.activation = activation()
         
         self.attn = WindowAttention(
@@ -380,9 +382,9 @@ class SwinTransformerBlock(nn.Module):
             
         self.chnnel_processing = ChannelProcessing(
                                                     dim, num_heads=heads, qkv_bias=qkv_bias, 
-                                                    attn_drop=attn_drop, drop_path=drop_path, drop=drop, 
-                                                    mlp_hidden_dim = int(dim * 4)
+                                                    attn_drop=attn_drop
                                                 )
+        self.norm3 = norm_layer(dim)
 
         self.register_buffer("attn_mask", attn_mask)
 
@@ -425,6 +427,10 @@ class SwinTransformerBlock(nn.Module):
         
         x = shortcut + self.drop_path(self.norm2(x))
 
+        shortcut2 = x
+        
+        x = shortcut2 + self.chnnel_processing(self.norm3(x))
+        
         return x
 
 
@@ -744,7 +750,7 @@ def AlterNet50(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 14, 3], num_blocks2=[0, 1, 7, 2], 
+                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 2, 5, 2], 
                         heads=(2, 4, 8, 16),
                         **kwargs)
 
