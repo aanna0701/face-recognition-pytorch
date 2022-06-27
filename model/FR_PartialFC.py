@@ -15,8 +15,6 @@ from easydict import EasyDict as edict
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.nn.functional as F
 from torchsummary import summary
-from torch.distributed.optim import ZeroRedundancyOptimizer
-import itertools
 
 def print_peak_memory(prefix, device):
     if device == 0:
@@ -112,8 +110,8 @@ class Model(nn.Module):
                     
             if conf.local_rank == 0:
                 print()
-                # summary(self.encoder, (3, 112, 112))
-                print(self.encoder)
+                summary(self.encoder, (3, 112, 112))
+                # print(self.encoder)
                 print()
                 print(self.loss)
                 print()
@@ -361,13 +359,15 @@ class Model(nn.Module):
         embedding_1 = np.concatenate(embedding_1_list)
         embedding_2 = np.concatenate(embedding_2_list)
         
+        s_t = time.time()
         hist_genuine, hist_imposter, score_list = pair_score(embedding_1, embedding_2, labels)
         
         roc, eer_th = performance_roc(hist_genuine, hist_imposter, min_level=self.min_level, max_level=self.max_level)
         acc = performance_acc(score_list, labels, eer_th)
         
         self.test_msg[f'{dataset_name}'].acc = acc
-        self.test_msg[f'{dataset_name}'].infer_time = infer_time
+        # self.test_msg[f'{dataset_name}'].infer_time = infer_time
+        self.test_msg[f'{dataset_name}'].infer_time = time.time()-s_t
         self.test_msg[f'{dataset_name}'].roc = roc
         
     # --------------------------------------------

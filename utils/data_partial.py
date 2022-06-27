@@ -284,7 +284,7 @@ class DATA_Module:
     def test_dataloader(self):
         test_loader_list = list()
         for test_datatset in self.test_dataset:
-            test_loader_list.append(DataLoader( test_datatset, batch_size=1000, num_workers=self.conf.num_workers, 
+            test_loader_list.append(DataLoader( test_datatset, batch_size=1, num_workers=self.conf.num_workers, 
                                                 shuffle=False, pin_memory=True))
         
         return test_loader_list

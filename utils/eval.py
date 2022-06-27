@@ -51,11 +51,10 @@ def performance_roc(hist_genuine, hist_imposter, min_level=3, max_level=9):
     return roc_result, eer_threshold
 
 
-@njit(parallel=True)
 def performance_acc(score_list, label_list, th):
     fr = 0
     fa = 0
-    for i in prange(len(score_list)):
+    for i in range(len(score_list)):
         score = score_list[i]
         label = label_list[i]
         
@@ -83,7 +82,7 @@ def pair_score(embedding_1, embedding_2, labels, metric='euclidean', min_level=3
         # ============================================
         # calculate cross matching scores and stack as a histogram
         # ============================================
-        for i in prange(num_total):
+        for i in range(num_total):
             sum_diff = 0
             for k in prange(embedding_1.shape[1]):
                 sum_diff += math.pow(embedding_1[i, k] - embedding_2[i, k], 2)
@@ -115,15 +114,16 @@ def cross_score(embeddings, labels, metric='euclidean'):
         # calculate cross matching scores and stack as a histogram
         # ============================================
         l = 0
-        for i in prange(num_total):
-            for j in prange(i):
+        for i in range(num_total):
+            for j in range(i):
                 sum_diff = 0
-                for k in prange(embeddings.shape[1]):
+                for k in range(embeddings.shape[1]):
                     sum_diff += math.pow(embeddings[j, k] - embeddings[i, k], 2)
                 score = (1 - sum_diff/4.)
                 hist_idx = int((1e5-1.) * score)
 
                 score_list[l] = score
+                
                 if labels[j] == labels[i]:
                     hist_genuine[hist_idx] += 1
                     label_list[l] = 1

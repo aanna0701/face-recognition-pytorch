@@ -127,8 +127,8 @@ class Trainer:
                 print(f'{test_idx+1}th Test Dataset') 
                 # Valdiation per Val Dataset
                 if self.conf.test_type == 'pair':
+                    test_outputs = list()
                     for batch in tqdm(test_loader):
-                        test_outputs = list()
                         test_outputs.append(model.test_step(batch, test_idx))
                         
                     # Summary Validation Results of Each Dataset

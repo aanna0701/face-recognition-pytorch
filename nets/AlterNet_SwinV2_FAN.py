@@ -20,7 +20,7 @@ class ChannelProcessing(nn.Module):
 
         self.cha_sr_ratio = cha_sr_ratio if num_heads > 1 else 1
 
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.qv = nn.Linear(dim, dim*2, bias=qkv_bias)
 
         self.attn_drop = nn.Dropout(attn_drop)
 
@@ -47,13 +47,16 @@ class ChannelProcessing(nn.Module):
         
         attn = torch.nn.functional.sigmoid(q @ k)
         return attn  * self.temperature
+    
     def forward(self, x):
         x = rearrange(x, 'b c h w -> b (h w) c')
         B, N, C = x.shape
+                
+        qv = self.qv(x).reshape(B, N, C, 2).permute(3, 0, 1, 2)
+        q = qv[0].reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        v = qv[1].reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
         
-        v = x.reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
-
-        q = self.q(x).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        
         k = x.reshape(B, N, self.num_heads,  C // self.num_heads).permute(0, 2, 1, 3)
 
         attn = self._gen_attn(q, k)
@@ -67,6 +70,7 @@ class ChannelProcessing(nn.Module):
         x = rearrange(x, 'b (h w) c -> b c h w', h=int(math.sqrt(N)))
         
         return x
+
     
     
     @torch.jit.ignore
@@ -248,6 +252,7 @@ class WindowAttention(nn.Module):
         else:
             self.q_bias = None
             self.v_bias = None
+            
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -319,21 +324,24 @@ class SwinTransformerBlock(nn.Module):
                     dim, 
                     dim_out,
                     heads, 
+                    input_resolution,
                     window_size=7, 
                     shift_size=0,
                     qkv_bias=True, 
                     drop=0., 
                     attn_drop=0., 
-                    drop_path=0.,
+                    drop_path=0.1,
                     norm_layer=nn.BatchNorm2d, 
                     pretrained_window_size=0,
                     activation=nn.GELU):
+        
         super().__init__()
         self.dim = dim
         self.num_heads = heads
         self.window_size = window_size
         self.shift_size = shift_size
         self.expansion = 1
+        
 
         self.shortcut = []
         if dim != dim_out * self.expansion:
@@ -341,7 +349,13 @@ class SwinTransformerBlock(nn.Module):
             self.norm1 = norm_layer(dim)
             
         self.shortcut = nn.Sequential(*self.shortcut)
-            
+        
+        # if min(input_resolution) <= self.window_size:
+        #     # if window size is larger than input resolution, we don't partition windows
+        #     self.shift_size = 0
+        #     self.window_size = min(input_resolution)
+        # assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+        
         
         self.activation = activation()
         
@@ -356,10 +370,11 @@ class SwinTransformerBlock(nn.Module):
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
-
+        
         if self.shift_size > 0:
             # calculate attention mask for SW-MSA
-            H, W = self.input_resolution
+            H, W = input_resolution
+            
             img_mask = torch.zeros((1, H, W, 1))  # 1 H W 1
             h_slices = (slice(0, -self.window_size),
                         slice(-self.window_size, -self.shift_size),
@@ -429,7 +444,7 @@ class SwinTransformerBlock(nn.Module):
 
         shortcut2 = x
         
-        x = shortcut2 + self.chnnel_processing(self.norm3(x))
+        x = shortcut2 + self.drop_path(self.norm3(self.chnnel_processing(x)))
         
         return x
 
@@ -630,7 +645,8 @@ class AlterNet(nn.Module):
     def __init__(self, conf, 
                     block, block2,
                     num_blocks, num_blocks2,
-                    heads
+                    heads,
+                    input_resolution=(112, 112)
                     ):
         # options from configuration
         super(AlterNet, self).__init__()
@@ -641,10 +657,10 @@ class AlterNet(nn.Module):
         self.relu = nn.ReLU()
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], num_blocks2[0], heads[0])
-        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], num_blocks2[1], heads[1], stride=2)
-        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], num_blocks2[2], heads[2], stride=2)
-        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], num_blocks2[3], heads[3], stride=2)
+        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], num_blocks2[0], heads[0], input_resolution=(input_resolution[0]//2, input_resolution[1]//2))
+        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], num_blocks2[1], heads[1], input_resolution=(input_resolution[0]//4, input_resolution[1]//4), stride=2)
+        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], num_blocks2[2], heads[2], input_resolution=(input_resolution[0]//8, input_resolution[1]//8), stride=2)
+        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], num_blocks2[3], heads[3], input_resolution=(input_resolution[0]//16, input_resolution[1]//16), stride=2)
 
         self.bn2 = nn.BatchNorm2d(block.expansion * conf.emd_size)
         self.dropout = nn.Dropout()
@@ -665,7 +681,7 @@ class AlterNet(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-    def stack_layers(self, block, block2, planes, blocks, blocks2, heads, stride=1):
+    def stack_layers(self, block, block2, planes, blocks, blocks2, heads, input_resolution, window_size=7, stride=1):
         downsample = None
         # Peforms downsample if stride != 1 of inplanes != block.expansion
         if stride != 1 or self.inplanes != planes * block.expansion:
@@ -674,7 +690,24 @@ class AlterNet(nn.Module):
                 nn.BatchNorm2d(planes * block.expansion),
             )
         
-        alt_seq = [False] * (blocks - blocks2 * 2 - 1) + [False, True] * blocks2
+        if input_resolution[0] > window_size:
+            num_blocks = (2*(blocks//3) + (blocks%3) - 1)
+            
+            assert 2*blocks2+blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
+            
+        else:
+            num_blocks = blocks - 1
+            
+            assert 2*blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
+        
+        
+        alt_seq = [False] * num_blocks
+        for i in range(blocks2):
+            idx = -2*(i)-1
+            alt_seq[idx] = True
+        
+        # print(alt_seq)
+        
         layers = []
         # For the first residual block, stride is 1 or 2
         layers.append(block(self.inplanes, planes, stride, downsample))
@@ -685,7 +718,9 @@ class AlterNet(nn.Module):
             if not is_alt:
                 layers.append(block(self.inplanes, planes))
             else:
-                layers.append(block2(self.inplanes, planes, heads=heads))
+                layers.append(block2(self.inplanes, planes, heads=heads, input_resolution=input_resolution))
+                if input_resolution[0] > window_size:
+                    layers.append(block2(self.inplanes, planes, heads=heads, input_resolution=input_resolution, shift_size=window_size//2))
 
         return nn.Sequential(*layers)
 
@@ -750,7 +785,7 @@ def AlterNet50(conf, **kwargs):
     ResidualBlock = BasicBlock
     MSABlock = SwinTransformerBlock
     model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 2, 5, 2], 
+                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 1, 4, 2], 
                         heads=(2, 4, 8, 16),
                         **kwargs)
 

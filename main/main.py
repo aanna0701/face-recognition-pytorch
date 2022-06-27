@@ -2,19 +2,15 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path.cwd().parent))
 import torch
-import numpy as np
 import torch.distributed as dist 
 import torch.multiprocessing as mp
 import argparse
 import os
 import importlib
-import pandas as pd
 from utils.data_partial import DATA_Module
 from model.FR_PartialFC import Model
 import time
 from utils.logger import print_log
-from shutil import copyfile
-from tqdm import tqdm
 from utils.trainer import Trainer
 
 os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
