@@ -45,7 +45,7 @@ class ChannelProcessing(nn.Module):
         _, _, N, _  = k.shape
         k = torch.nn.functional.adaptive_avg_pool2d(k.softmax(-2), (N, 1))
         
-        attn = torch.nn.functional.sigmoid(q @ k)
+        attn = torch.nn.sigmoid(q @ k)
         return attn  * self.temperature
     
     def forward(self, x):

@@ -68,6 +68,9 @@ class Model(nn.Module):
             
         elif 'Swin' in conf.network:
             self.encoder = importlib.import_module(f"nets.SwinV2").Encoder(conf=conf)
+            
+        elif 'EffiAlterNet' in conf.network:
+            self.encoder = importlib.import_module(f"nets.EffiAlterNet_s").Encoder(conf=conf)
         
         self.encoder = self.encoder.to(conf.local_rank)
         
