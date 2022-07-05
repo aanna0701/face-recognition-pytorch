@@ -46,24 +46,6 @@ def conv1x1(in_planes, out_planes, stride=1, groups=1):
                  bias=False)
 
 
-# ======================================= Classifier layers ========================================
-
-class Flatten(nn.Module):
-    def forward(self, x):
-        return x.view(x.size(0), -1)
-
-def output_layer(emb_size, channel, kernel_size, dropout_rate=0.0):
-
-    filter_size = kernel_size * kernel_size
-    output = nn.Sequential(
-        nn.BatchNorm2d(channel),
-        nn.Dropout(dropout_rate),
-        Flatten(),
-        nn.Linear(channel * filter_size, emb_size),
-        nn.BatchNorm1d(emb_size),
-    )
-
-    return output
 
 # ======================================== Residual Network ========================================
 
@@ -212,7 +194,7 @@ class ResNet(nn.Module):
         self.layer4 = self.stack_layers(block, conf.emd_size, layers[3], stride=2)
 
         self.bn2 = nn.BatchNorm2d(block.expansion * conf.emd_size)
-        self.dropout = nn.Dropout()
+        # self.dropout = nn.Dropout()
         self.fc = nn.Linear(block.expansion * conf.emd_size * 7 * 7, conf.emd_size)
         self.bn3 = nn.BatchNorm1d(conf.emd_size)
 
@@ -258,7 +240,7 @@ class ResNet(nn.Module):
         x = self.layer4(x)
         
         x = self.bn2(x)
-        x = self.dropout(x)
+        # x = self.dropout(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         x = self.bn3(x)

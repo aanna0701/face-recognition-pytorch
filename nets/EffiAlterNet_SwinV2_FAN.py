@@ -9,6 +9,7 @@ import torch.jit
 import math
 from einops import rearrange
 
+
 class ChannelProcessing(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., cha_sr_ratio=1):
         super().__init__()
@@ -31,7 +32,7 @@ class ChannelProcessing(nn.Module):
             trunc_normal_(m.weight, std=.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
+        elif isinstance(m, nn.BatchNorm1d):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
@@ -99,7 +100,7 @@ class Mlp(nn.Module):
             trunc_normal_(m.weight, std=.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
+        elif isinstance(m, nn.BatchNorm1d):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
@@ -162,7 +163,6 @@ def window_partition(x, window_size):
         windows: (num_windows*B, window_size, window_size, C)
     """
     B, H, W, C = x.shape
-    
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
     return windows
@@ -197,7 +197,7 @@ class WindowAttention(nn.Module):
         pretrained_window_size (tuple[int]): The height and width of the window in pre-training.
     """
 
-    def __init__(self, dim, window_size, num_heads, dim_head=32, qkv_bias=True, attn_drop=0., proj_drop=0.,
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, attn_drop=0., proj_drop=0.,
                  pretrained_window_size=[0, 0]):
 
         super().__init__()
@@ -205,7 +205,6 @@ class WindowAttention(nn.Module):
         self.window_size = window_size  # Wh, Ww
         self.pretrained_window_size = pretrained_window_size
         self.num_heads = num_heads
-        assert dim_head * self.num_heads == dim, 'Not match dim_head * num_heads and hidden_dim'
 
         self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True)
 
@@ -301,6 +300,19 @@ class WindowAttention(nn.Module):
         
         return x
 
+# --------------------------------------------
+# 1x1 convolution layer
+# --------------------------------------------
+def conv1x1(in_planes, out_planes, stride=1, groups=1):
+    """ 1x1 convolution
+
+    Input shape:
+        (batch size, in_planes, height, width)
+    Output shape:
+        (batch size, out_planes, height, width)
+    """
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, padding=0, groups=groups, bias=False)
+
 
 
 class SwinTransformerBlock(nn.Module):
@@ -331,7 +343,7 @@ class SwinTransformerBlock(nn.Module):
                     qkv_bias=True, 
                     drop=0., 
                     attn_drop=0., 
-                    drop_path=0.1,
+                    drop_path=0.,
                     norm_layer=nn.BatchNorm2d, 
                     pretrained_window_size=0,
                     activation=nn.GELU):
@@ -450,260 +462,223 @@ class SwinTransformerBlock(nn.Module):
         return x
 
 
-# --------------------------------------------
-# 7x7 convolution layer
-# --------------------------------------------
-def conv7x7(in_planes, out_planes, stride=1, groups=1):
-    """ 7x7 convolution with padding = 3
 
-    Input shape:
-        (batch size, in_planes, height, width)
-    Output shape:
-        (batch size, out_planes, height, width)
+"""
+Creates a EfficientNetV2 Model as defined in:
+Mingxing Tan, Quoc V. Le. (2021). 
+EfficientNetV2: Smaller Models and Faster Training
+arXiv preprint arXiv:2104.00298.
+import from https://github.com/d-li14/mobilenetv2.pytorch
+"""
+
+
+def _make_divisible(v, divisor, min_value=None):
     """
-    return nn.Conv2d(in_planes, out_planes, kernel_size=7, stride=stride, padding=3, groups=groups,
-                    bias=False)
-
-# --------------------------------------------
-# 3x3 convolution layer
-# --------------------------------------------
-def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
-    """ 3x3 convolution with padding = 1
-
-    Input shape:
-        (batch size, in_planes, height, width)
-    Output shape:
-        (batch size, out_planes, height, width)
+    This function is taken from the original tf repo.
+    It ensures that all layers have a channel number that is divisible by 8
+    It can be seen here:
+    https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet.py
+    :param v:
+    :param divisor:
+    :param min_value:
+    :return:
     """
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, groups=groups,
-                    bias=False, dilation=dilation)
-
-# --------------------------------------------
-# 1x1 convolution layer
-# --------------------------------------------
-def conv1x1(in_planes, out_planes, stride=1, groups=1):
-    """ 1x1 convolution
-
-    Input shape:
-        (batch size, in_planes, height, width)
-    Output shape:
-        (batch size, out_planes, height, width)
-    """
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, padding=0, groups=groups,
-                 bias=False)
+    if min_value is None:
+        min_value = divisor
+    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
+    # Make sure that round down does not go down by more than 10%.
+    if new_v < 0.9 * v:
+        new_v += divisor
+    return new_v
 
 
-# ======================================= Classifier layers ========================================
+# SiLU (Swish) activation function
+if hasattr(nn, 'SiLU'):
+    SiLU = nn.SiLU
+else:
+    # For compatibility with old PyTorch versions
+    class SiLU(nn.Module):
+        def forward(self, x):
+            return x * torch.sigmoid(x)
 
-class Flatten(nn.Module):
+
+class SELayer(nn.Module):
+    def __init__(self, inp, oup, reduction=4):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+                nn.Linear(oup, _make_divisible(inp // reduction, 8)),
+                SiLU(),
+                nn.Linear(_make_divisible(inp // reduction, 8), oup),
+                nn.Sigmoid()
+        )
+
     def forward(self, x):
-        return x.view(x.size(0), -1)
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y
 
-def output_layer(emb_size, channel, kernel_size, dropout_rate=0.0):
 
-    filter_size = kernel_size * kernel_size
-    output = nn.Sequential(
-        nn.BatchNorm2d(channel),
-        nn.Dropout(dropout_rate),
-        Flatten(),
-        nn.Linear(channel * filter_size, emb_size),
-        nn.BatchNorm1d(emb_size),
+def conv_3x3_bn(inp, oup, stride):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
+        nn.BatchNorm2d(oup),
+        SiLU()
     )
 
-    return output
 
-# ======================================== Residual Network ========================================
+def conv_1x1_bn(inp, oup):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 1, 1, 0, bias=False),
+        nn.BatchNorm2d(oup),
+        SiLU()
+    )
 
-# --------------------------------------------
-# Residual blocks - BasicBlock
-# --------------------------------------------
-class BasicBlock(nn.Module):
-    """ Implement of Residual block - IR BasicBlock architecture (https://arxiv.org/pdf/1610.02915.pdf):
 
-    This layer creates a basic residual block of AlterNet architecture, which is a pre-activation Residual Unit.
-    It consists of two 3x3 convolution layers, three batch normalization layers and one ReLU layers.
+class MBConv(nn.Module):
+    def __init__(self, inp, oup, stride, expand_ratio, use_se):
+        super(MBConv, self).__init__()
+        assert stride in [1, 2]
 
-    Shortcut connection options:
-        If the output feature map has the same dimensions as the input feature map,
-        the shortcut performs identity mapping.
-
-        If the output feature map dimensions increase(usually doubled),
-        the shortcut performs downsample to match dimensions and halve the feature map size
-        by using 1x1 convolution with stride 2.
-
-    Args:
-        inplanes: dimension of input feature
-        planes: dimension of ouput feature
-    """
-    expansion = 1
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-        super(BasicBlock, self).__init__()
-        # When the dimensions of the output feature map increase,
-        # self.conv2 and self.downsample layers performs downsample
-        
-        self.conv1 = conv3x3(inplanes, inplanes)
-        self.bn1 = nn.BatchNorm2d(inplanes)
-        self.relu = nn.ReLU()
-        
-        self.conv2 = conv3x3(inplanes, planes, stride)
-        self.bn2 = nn.BatchNorm2d(planes)
-        
-        self.downsample = downsample
-        self.stride = stride
-        
-    def forward(self, x):
-        residual = x
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-        
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            residual = self.downsample(x)
-
-        out += residual
-
-        return out
-
-# --------------------------------------------
-# Residual blocks - Bottleneck
-# --------------------------------------------
-class Bottleneck(nn.Module):
-    """ Implement of Residual block - IR Bottleneck architecture (https://arxiv.org/pdf/1610.02915.pdf):
-
-    This layer creates a bottleneck residual block of AlterNet architecture, which is a original Residual Unit.
-    It consists of three 3x3 convolution layers, three batch normalization layers and three ReLU layers.
-
-    Shortcut connection options:
-        If the output feature map has the same dimensions as the input feature map,
-        the shortcut performs identity mapping.
-
-        If the output feature map dimensions increase(usually doubled),
-        the shortcut performs downsample to match dimensions and halve the feature map size
-        by using 1x1 convolution with stride 2.
-
-    Args:
-        inplanes: dimension of input feature
-        planes: compressed dimension after passing conv1
-        expansion: ratio to expand dimension
-    """
-    
-    expansion = 4
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-        super(Bottleneck, self).__init__()
-        # When the dimensions of the output feature map increase,
-        # self.conv2 and self.downsample layers performs downsample
-        
-        self.conv1 = conv1x1(inplanes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.relu1 = nn.ReLU()
-        
-        self.conv2 = conv3x3(planes, planes, stride)
-        self.bn3 = nn.BatchNorm2d(planes)
-        self.relu2 = nn.ReLU()
-        
-        self.conv3 = conv1x1(planes, planes * self.expansion)
-        self.bn4 = nn.BatchNorm2d(planes * self.expansion)
-
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x):
-        residual = x
-
-        out = self.conv1(out)
-        out = self.bn2(out)
-        out = self.relu1(out)
-        
-        out = self.conv2(out)
-        out = self.bn3(out)
-        out = self.relu2(out)
-        
-        out = self.conv3(out)
-        out = self.bn4(out)
-
-        if self.downsample is not None:
-            residual = self.downsample(x)
-
-        out += residual
-
-        return out
-
-# --------------------------------------------
-# AlterNet backbone
-# --------------------------------------------
-class AlterNet(nn.Module):
-    """ Implement of Residual network (AlterNet) (https://arxiv.org/pdf/1512.03385.pdf):
-
-    This layer creates a AlterNet model by stacking basic or bottleneck residual blocks.
-
-    Args:
-        block: block to stack in each layer - BasicBlock or Bottleneck
-        layers: # of stacked blocks in each layer
-    """
-    def __init__(self, conf, 
-                    block, block2,
-                    num_blocks, num_blocks2,
-                    heads
-                    ):
-        # options from configuration
-        super(AlterNet, self).__init__()
-        input_resolution = (conf.img_size, conf.img_size)
-        self.inplanes = 64
-        
-        self.conv1 = conv3x3(3, self.inplanes, stride=2)
-        self.bn1 = nn.BatchNorm2d(self.inplanes)
-        self.relu = nn.ReLU()
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-
-        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], num_blocks2[0], heads[0], input_resolution=(input_resolution[0]//4, input_resolution[1]//4))
-        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], num_blocks2[1], heads[1], input_resolution=(input_resolution[0]//8, input_resolution[1]//8), stride=2)
-        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], num_blocks2[2], heads[2], input_resolution=(input_resolution[0]//16, input_resolution[1]//16), stride=2)
-        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], num_blocks2[3], heads[3], input_resolution=(input_resolution[0]//32, input_resolution[1]//32), stride=2)
-
-        self.bn2 = nn.BatchNorm2d(block.expansion * conf.emd_size)
-        self.dropout = nn.Dropout()
-        self.gap = nn.AdaptiveAvgPool2d((6, 6))
-        self.fc = nn.Linear(block.expansion * conf.emd_size * 6 * 6, conf.emd_size)
-        self.bn3 = nn.BatchNorm1d(conf.emd_size)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-    def stack_layers(self, block, block2, planes, blocks, blocks2, heads, input_resolution, window_size=3, stride=1):
-        downsample = None
-        # Peforms downsample if stride != 1 of inplanes != block.expansion
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                nn.BatchNorm2d(planes * block.expansion),
+        hidden_dim = round(inp * expand_ratio)
+        self.identity = stride == 1 and inp == oup
+        if use_se:
+            self.conv = nn.Sequential(
+                # pw
+                nn.Conv2d(inp, hidden_dim, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(hidden_dim),
+                SiLU(),
+                # dw
+                nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),
+                nn.BatchNorm2d(hidden_dim),
+                SiLU(),
+                SELayer(inp, hidden_dim),
+                # pw-linear
+                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(oup),
             )
+        else:
+            self.conv = nn.Sequential(
+                # fused
+                nn.Conv2d(inp, hidden_dim, 3, stride, 1, bias=False),
+                nn.BatchNorm2d(hidden_dim),
+                SiLU(),
+                # pw-linear
+                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(oup),
+            )
+
+        self.apply(self._init_weights)
+                    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm) or isinstance(m, nn.BatchNorm2d):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        if self.identity:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
+class EffNetV2(nn.Module):
+    def __init__(   self, 
+                    cfgs,
+                    block = MBConv,
+                    block2 = SwinTransformerBlock,
+                    input_resolution=(112, 112),
+                    n_classes=1000, 
+                    width_mult=1.):
+        super(EffNetV2, self).__init__()
+        self.cfgs = cfgs
+
+        # building first layer
+        input_channel = _make_divisible(24 * width_mult, 8)
+        layers = [conv_3x3_bn(3, input_channel, 1)]
+        # building inverted residual blocks
+        block = MBConv
         
-        # if input_resolution[0] > window_size:
-        #     num_blocks = (2*(blocks//3) + (blocks%3) - 1)
+        for t, c, n, s, use_se, n_transformer, heads in self.cfgs:
+            output_channel = _make_divisible(c * width_mult, 8)
+            layers = layers + self.stack_layers(
+                                                block, 
+                                                block2, 
+                                                input_channel=input_channel, 
+                                                output_channel=output_channel, 
+                                                blocks=n,
+                                                blocks2=n_transformer,
+                                                heads=heads,
+                                                input_resolution=(input_resolution[0], input_resolution[1]), 
+                                                window_size=7, 
+                                                stride=s,
+                                                expand_ratio=t,
+                                                use_se=use_se)
             
-        #     assert 2*blocks2+blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
-            
-        # else:
-        #     num_blocks = blocks - 1
-            
-        #     assert 2*blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
+            input_channel = output_channel
+            input_resolution = (input_resolution[0]//2, input_resolution[1]//2)
+                
+        self.features = nn.Sequential(*layers)
         
-        num_blocks = (2*(blocks//3) + (blocks%3) - 1)
+        # self.dropout = nn.Dropout()
+        self.gap = nn.AdaptiveAvgPool2d((7, 7))
+        self.fc = nn.Linear(output_channel * 7 * 7, n_classes)
+        self.bn = nn.BatchNorm1d(n_classes)
         
-        assert 2*blocks2+blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
+        self.apply(self._init_weights)
+                    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+    
+    def forward(self, x):
+        x = self.features(x)
+        
+        # x = self.dropout(x)
+        x = self.gap(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        x = self.bn(x)
+        
+        return x
+
+                
+    def stack_layers(   self, 
+                        block, 
+                        block2, 
+                        input_channel, 
+                        output_channel, 
+                        blocks, 
+                        blocks2, 
+                        heads, 
+                        input_resolution, 
+                        window_size=7, 
+                        stride=1,
+                        expand_ratio=1,
+                        use_se=True
+                        ):
+        # Peforms downsample if stride != 1 of inplanes != block.expansion
+        
+        if input_resolution[0] > window_size:
+            num_blocks = (2*(blocks//3) + (blocks%3) - 1)
+            
+            assert 2*blocks2+blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
+            
+        else:
+            num_blocks = blocks - 1
+            
+            assert 2*blocks2 <= blocks, 'The number of transformers must not exceed cnn !!!'
+        
         
         alt_seq = [False] * num_blocks
         for i in range(blocks2):
@@ -714,126 +689,105 @@ class AlterNet(nn.Module):
         
         layers = []
         # For the first residual block, stride is 1 or 2
-        layers.append(block(self.inplanes, planes, stride, downsample))
+        layers.append(block(input_channel, output_channel, stride, expand_ratio, use_se))
         
         # From the second residual block, stride is 1
-        self.inplanes = planes * block.expansion
         for is_alt in alt_seq:
             if not is_alt:
-                layers.append(block(self.inplanes, planes))
+                layers.append(block(output_channel, output_channel, 1, expand_ratio, use_se))
             else:
-                # layers.append(block2(self.inplanes, planes, heads=heads, input_resolution=input_resolution))
-                # if input_resolution[0] > window_size:
-                #     layers.append(block2(self.inplanes, planes, heads=heads, input_resolution=input_resolution, shift_size=window_size//2))
-                layers.append(block2(self.inplanes, planes, heads=heads, input_resolution=input_resolution, window_size=window_size))
-                layers.append(block2(self.inplanes, planes, heads=heads, input_resolution=input_resolution, shift_size=window_size//2, window_size=window_size))
+                layers.append(block2(output_channel, output_channel, heads=heads, input_resolution=input_resolution))
+                if input_resolution[0] > window_size:
+                    layers.append(block2(output_channel, output_channel, heads=heads, input_resolution=input_resolution, shift_size=window_size//2))
 
-        return nn.Sequential(*layers)
+        return layers
 
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        
-        x = self.bn2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.gap(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        x = self.bn3(x)
-        
-        return x
 
-# --------------------------------------------
-# Define AlterNet models
-# --------------------------------------------
-def AlterNet18(conf, **kwargs):
-    """ Constructs a AlterNet-18 model
-    Args:
-        conf: configurations
+
+
+def EffiAlter_s(conf):
     """
-    ResidualBlock = BasicBlock
-    MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[2, 2, 2, 2], num_blocks2=[0, 1, 1, 1], 
-                        heads=(2, 4, 8, 16),
-                        **kwargs)
-
-    
-    return model
-
-def AlterNet34(conf, **kwargs):
-    """ Constructs a AlterNet-34 model
-    Args:
-        conf: configurations
+    Constructs a EfficientNetV2-S model
     """
-    ResidualBlock = BasicBlock
-    MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 6, 3], num_blocks2=[0, 1, 3, 2], 
-                        heads=(2, 4, 8, 16),
-                        **kwargs)
+    cfgs = [
+        # t, c, n, s, SE    # n_transformer, heads
+        [1,  24,  1, 1, 0] +        [0, 2],
+        [2,  48,  3, 2, 0] +        [0, 2],
+        [2,  64,  4, 2, 0] +        [0, 2],
+        [2, 128,  5, 2, 1] +        [0, 4],
+        [3, 160,  9, 1, 1] +        [0, 8],
+        [3, 256, 4, 2, 1] +        [0, 8],
+        # # t, c, n, s, SE    # n_transformer, heads
+        # [1,  24,  2, 1, 0] +        [0, 2],
+        # [4,  48,  4, 2, 0] +        [0, 2],
+        # [4,  64,  4, 2, 0] +        [0, 2],
+        # [4, 128,  6, 2, 1] +        [0, 4],
+        # [6, 160,  9, 1, 1] +        [0, 8],
+        # [6, 256, 15, 2, 1] +        [0, 8],
+    ]
+    return EffNetV2(cfgs, n_classes=conf.emd_size)
 
-    
-    return model
 
-def AlterNet50(conf, **kwargs):
-    """ Constructs a AlterNet-50 model
-    Args:
-        conf: configurations
+def EffiAlter_m(conf):
     """
-    ResidualBlock = BasicBlock
-    MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 4, 14, 4], num_blocks2=[0, 1, 4, 1], 
-                        heads=(2, 4, 8, 16),
-                        **kwargs)
-
-    
-    return model
-
-def AlterNet100(conf, **kwargs):
-    """ Constructs a AlterNet-100 model
-    Args:
-        conf: configurations
+    Constructs a EfficientNetV2-M model
     """
-    ResidualBlock = BasicBlock
-    MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 13, 30, 4], num_blocks2= [0, 1, 1, 2],
-                        heads=(2, 4, 8, 16),
-                        **kwargs)
+    cfgs = [
+        # t, c, n, s, SE    # n_transformer, heads
+        [1,  24,  3, 1, 0] +        [0, 2],
+        [4,  48,  5, 2, 0] +        [0, 2],
+        [4,  80,  5, 2, 0] +        [0, 2],
+        [4, 160,  7, 2, 1] +        [0, 4],
+        [6, 176, 14, 1, 1] +        [0, 8],
+        [6, 304, 18, 2, 1] +        [2, 8],
+        [6, 512,  5, 1, 1] +        [2, 16],
+    ]
+    return EffNetV2(cfgs, n_classes=conf.emd_size)
 
-    
-    return model
 
-def AlterNet200(conf, **kwargs):
-    """ Constructs a AlterNet-100 model
-    Args:
-        conf: configurations
+def EffiAlter_l(conf):
     """
-    ResidualBlock = BasicBlock
-    MSABlock = SwinTransformerBlock
-    model = AlterNet(conf, ResidualBlock, MSABlock, 
-                        num_blocks=[3, 43, 50, 3], num_blocks2= [0, 1, 3, 2],
-                        heads=(2, 4, 8, 16),
-                        **kwargs)
+    Constructs a EfficientNetV2-L model
+    """
+    cfgs = [
+        # t, c, n, s, SE    # n_transformer, heads
+        [1,  32,  4, 1, 0] +        [0, 2],
+        [4,  64,  7, 2, 0] +        [0, 2],
+        [4,  96,  7, 2, 0] +        [0, 2],
+        [4, 192, 10, 2, 1] +        [0, 4],
+        [6, 224, 19, 1, 1] +        [2, 8],
+        [6, 384, 25, 2, 1] +        [2, 16],
+        [6, 640,  7, 1, 1] +        [2, 32],
+    ]
+    return EffNetV2(cfgs, n_classes=conf.emd_size)
 
-    
-    return model
+
+def EffiAlter_xl(conf):
+    """
+    Constructs a EfficientNetV2-XL model
+    """
+    cfgs = [
+        # t, c, n, s, SE    # n_transformer, heads
+        [1,  32,  4, 1, 0] +        [0, 2],
+        [4,  64,  8, 2, 0] +        [0, 2],
+        [4,  96,  8, 2, 0] +        [0, 2],
+        [4, 192, 16, 2, 1] +        [0, 4],
+        [6, 256, 24, 1, 1] +        [2, 8],
+        [6, 512, 32, 2, 1] +        [2, 16],
+        [6, 640,  8, 1, 1] +        [2, 32],
+    ]
+    return EffNetV2(cfgs, n_classes=conf.emd_size)
+
+
+
+
 
 def Encoder(conf):
-    if conf.network == 'AlterNet200':
-        return AlterNet200(conf)
-    elif conf.network == 'AlterNet100':
-        return AlterNet100(conf)
-    elif conf.network == 'AlterNet50':
-        return AlterNet50(conf)
-    elif conf.network == 'AlterNet34':
-        return AlterNet34(conf)
+    if conf.network == 'EffiAlter_s':
+        return EffiAlter_s(conf)
+    elif conf.network == 'EffiAlter_m':
+        return EffiAlter_m(conf)
+    elif conf.network == 'EffiAlter_l':
+        return EffiAlter_l(conf)
+    elif conf.network == 'EffiAlter_xl':
+        return EffiAlter_xl(conf)

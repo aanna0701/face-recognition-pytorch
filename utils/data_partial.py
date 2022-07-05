@@ -15,6 +15,7 @@ import time
 from torch.utils.data.distributed import DistributedSampler
 import pandas as pd
 from skimage import io
+from torchvision import transforms
 
 class TEST_DATASET(Dataset):
     def __init__(self, data_dir: str, conf=None):
@@ -26,6 +27,7 @@ class TEST_DATASET(Dataset):
         self.image_arr = np.asarray(self.data_info.iloc[:, 0])
         self.label_arr = np.asarray(self.data_info.iloc[:, 1])
         self.transform = self.make_transform()
+        self.conf = conf
 
     def __len__(self):
         return len(self.data_info)
@@ -47,7 +49,7 @@ class TEST_DATASET(Dataset):
     def make_transform(self):
         img_transform = list()
         
-        img_transform.append(alb.Resize(112, 112))
+        img_transform.append(alb.Resize(self.conf.img_size, self.conf.img_size))
         img_transform.append(alb.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]))
         img_transform.append(alp.transforms.ToTensorV2())
         
@@ -71,6 +73,7 @@ class VAL_DATASET_BYTE(Dataset):
         random.shuffle(permute)
         self.pair_arr = self.pair_arr[permute]
         self.label_arr = self.label_arr[permute]
+        self.conf = conf
         
         assert np.shape(self.pair_arr)[0] == np.shape(self.label_arr)[0], 'Not match size of patch and label !!!'
         
@@ -82,6 +85,7 @@ class VAL_DATASET_BYTE(Dataset):
             idx = idx.tolist()
         
         pair = torch.Tensor(self.pair_arr[idx])
+        pair = transforms.Resize((self.conf.img_size, self.conf.img_size))(pair)
         
         label = self.label_arr[idx]
         
@@ -139,7 +143,7 @@ class CustomImageFolder(DatasetFolder):
         if "ISONoise" in conf.data_augmentation:
             img_transform.append(alb.ISONoise(p=conf.img_augmenation.iso_p, color_shift=conf.img_augmenation.c_shift, intensity=conf.img_augmenation.intensity))
         
-        img_transform.append(alb.Resize(112, 112))
+        img_transform.append(alb.Resize(self.conf.img_size, self.conf.img_size))
         
         if "RandomHorizontalFlip" in conf.data_augmentation:
             img_transform.append(alb.HorizontalFlip()) 

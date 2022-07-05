@@ -99,6 +99,7 @@ def train(rank, world_size, args):
     conf.mixed_precision = args.no_mixed_precision
     conf.sample_rate = args.sample_rate
     conf.ckpt_path = args.ckpt_path
+    conf.img_size = 192 if 'AlterNet' in conf.network else 112
 
     # ===========================================================
     # Save directories

@@ -1,4 +1,6 @@
-for m in AlterNet50 ResNet50
+for i in 1 2 3
+do
+for m in AlterNet50 
 do
 for r in 0.3
 do
@@ -10,5 +12,6 @@ do
 CUDA_VISIBLE_DEVICES='0' python -u main.py --mode train --sample_rate ${r} --optimizer AdamW --network ${m} --lr ${l}
 done
 
+done
 done
 done

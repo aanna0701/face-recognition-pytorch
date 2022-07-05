@@ -58,7 +58,6 @@ class Model(nn.Module):
         # ---------------------------------------
         # model
         # ---------------------------------------
-        
         # Encoder
         if 'ResNet' in conf.network:
             self.encoder = importlib.import_module(f"nets.resnet").Encoder(conf=conf)
@@ -69,9 +68,9 @@ class Model(nn.Module):
         elif 'Swin' in conf.network:
             self.encoder = importlib.import_module(f"nets.SwinV2").Encoder(conf=conf)
             
-        elif 'EffiAlterNet' in conf.network:
-            self.encoder = importlib.import_module(f"nets.EffiAlterNet_s").Encoder(conf=conf)
-        
+        elif 'EffiAlter' in conf.network:
+            self.encoder = importlib.import_module(f"nets.EffiAlterNet_SwinV2_FAN").Encoder(conf=conf)
+            
         self.encoder = self.encoder.to(conf.local_rank)
         
         if conf.ckpt_path is not None:
@@ -113,7 +112,7 @@ class Model(nn.Module):
                     
             if conf.local_rank == 0:
                 print()
-                summary(self.encoder, (3, 112, 112))
+                summary(self.encoder, (3, conf.img_size, conf.img_size))
                 # print(self.encoder)
                 print()
                 print(self.loss)
