@@ -396,11 +396,11 @@ class SwinTransformerBlock(nn.Module):
         else:
             attn_mask = None
             
-        self.chnnel_processing = ChannelProcessing(
-                                                    dim, num_heads=heads, qkv_bias=qkv_bias, 
-                                                    attn_drop=attn_drop
-                                                )
-        self.norm3 = norm_layer(dim)
+        # self.chnnel_processing = ChannelProcessing(
+        #                                             dim, num_heads=heads, qkv_bias=qkv_bias, 
+        #                                             attn_drop=attn_drop
+        #                                         )
+        # self.norm3 = norm_layer(dim)
 
         self.register_buffer("attn_mask", attn_mask)
 
@@ -443,9 +443,9 @@ class SwinTransformerBlock(nn.Module):
         
         x = shortcut + self.drop_path(self.norm2(x))
 
-        shortcut2 = x
+        # shortcut2 = x
         
-        x = shortcut2 + self.drop_path(self.norm3(self.chnnel_processing(x)))
+        # x = shortcut2 + self.drop_path(self.norm3(self.chnnel_processing(x)))
         
         return x
 
@@ -658,10 +658,10 @@ class AlterNet(nn.Module):
         self.relu = nn.ReLU()
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], num_blocks2[0], heads[0], input_resolution=(input_resolution[0]//4, input_resolution[1]//4))
-        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], num_blocks2[1], heads[1], input_resolution=(input_resolution[0]//8, input_resolution[1]//8), stride=2)
-        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], num_blocks2[2], heads[2], input_resolution=(input_resolution[0]//16, input_resolution[1]//16), stride=2)
-        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], num_blocks2[3], heads[3], input_resolution=(input_resolution[0]//32, input_resolution[1]//32), stride=2)
+        self.layer1 = self.stack_layers(block, block2, 64, num_blocks[0], num_blocks2[0], heads[0], input_resolution=(input_resolution[0]//4, input_resolution[1]//4), window_size=6)
+        self.layer2 = self.stack_layers(block, block2,  128, num_blocks[1], num_blocks2[1], heads[1], input_resolution=(input_resolution[0]//8, input_resolution[1]//8), stride=2, window_size=6)
+        self.layer3 = self.stack_layers(block, block2,  256, num_blocks[2], num_blocks2[2], heads[2], input_resolution=(input_resolution[0]//16, input_resolution[1]//16), stride=2, window_size=6)
+        self.layer4 = self.stack_layers(block, block2,  conf.emd_size, num_blocks[3], num_blocks2[3], heads[3], input_resolution=(input_resolution[0]//32, input_resolution[1]//32), stride=2, window_size=3)
 
         self.bn2 = nn.BatchNorm2d(block.expansion * conf.emd_size)
         self.dropout = nn.Dropout()
